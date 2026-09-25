@@ -12,8 +12,8 @@ import {
   getDocFromServer,
   Unsubscribe as FirestoreUnsubscribe 
 } from 'firebase/firestore';
-import { StudentExamState, FirebaseConfig, Question, GlobalSessionState } from '../types';
-import { CHEMISTRY_QUESTIONS } from '../data/questions';
+import { StudentExamState, FirebaseConfig, Question, GlobalSessionState, SavedExam } from '../types';
+import { CHEMISTRY_QUESTIONS, PREDEFINED_SAVED_EXAMS } from '../data/questions';
 import defaultAppletConfig from '../../firebase-applet-config.json';
 
 export enum OperationType {
@@ -63,6 +63,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 const STORAGE_KEY_FIREBASE_CONFIG = 'quimica_firebase_config_v1';
 const STORAGE_KEY_STUDENTS_LOCAL = 'quimica_students_local_db';
 const STORAGE_KEY_EXAM_DATA = 'quimica_exam_data_v1';
+const STORAGE_KEY_SAVED_EXAMS = 'quimica_saved_exams_library_v1';
 const STORAGE_KEY_SESSION_DATA = 'quimica_global_session_v1';
 const CHANNEL_NAME = 'quimica_live_proctor_channel';
 
@@ -84,6 +85,7 @@ class FirebaseDualService {
   private config: FirebaseConfig | null = null;
   private broadcastChannel: BroadcastChannel | null = null;
   private localStudentsCache: Record<string, StudentExamState> = {};
+  private savedExams: SavedExam[] = [];
   
   private activeExamData: ExamDataPayload = {
     title: 'Examen de Química General',
@@ -101,6 +103,7 @@ class FirebaseDualService {
   private activeListeners: Set<(students: Record<string, StudentExamState>) => void> = new Set();
   private examListeners: Set<(data: ExamDataPayload) => void> = new Set();
   private sessionListeners: Set<(session: GlobalSessionState) => void> = new Set();
+  private savedExamsListeners: Set<(exams: SavedExam[]) => void> = new Set();
 
   private rtdbStudentsUnsub: (() => void) | null = null;
   private rtdbExamUnsub: (() => void) | null = null;
@@ -112,6 +115,7 @@ class FirebaseDualService {
 
   constructor() {
     this.initBroadcastChannel();
+    this.loadSavedExamsFromStorage();
     this.loadExamFromStorage();
     this.loadSessionFromStorage();
     this.loadLocalCache();
@@ -505,6 +509,130 @@ class FirebaseDualService {
         fn(copy);
       } catch (err) {
         console.error('Error in exam listener:', err);
+      }
+    });
+  }
+
+  // --- SAVED EXAMS LIBRARY (GUARDAR DISTINTOS EXÁMENES & CREAR NUEVO EXAMEN) ---
+
+  private loadSavedExamsFromStorage() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_SAVED_EXAMS);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          this.savedExams = parsed;
+          return;
+        }
+      }
+    } catch {
+      // Ignore
+    }
+    // Default to predefined chemistry exams
+    this.savedExams = [...PREDEFINED_SAVED_EXAMS];
+    this.saveSavedExamsToStorage();
+  }
+
+  private saveSavedExamsToStorage() {
+    try {
+      localStorage.setItem(STORAGE_KEY_SAVED_EXAMS, JSON.stringify(this.savedExams));
+    } catch {
+      // Ignore
+    }
+  }
+
+  public getSavedExams(): SavedExam[] {
+    return [...this.savedExams];
+  }
+
+  public async saveExamToLibrary(exam: {
+    id?: string;
+    title: string;
+    description?: string;
+    questions: Question[];
+    durationMinutes?: number;
+  }): Promise<SavedExam> {
+    const now = Date.now();
+    const cleanTitle = exam.title.trim() || 'Examen Sin Título';
+    const examId = exam.id || `exam_${now}_${Math.random().toString(36).substring(2, 7)}`;
+
+    const existingIndex = this.savedExams.findIndex((e) => e.id === examId);
+    let savedItem: SavedExam;
+
+    if (existingIndex >= 0) {
+      savedItem = {
+        ...this.savedExams[existingIndex],
+        title: cleanTitle,
+        description: exam.description || this.savedExams[existingIndex].description,
+        questions: exam.questions,
+        durationMinutes: exam.durationMinutes || this.savedExams[existingIndex].durationMinutes || 20,
+        updatedAt: now
+      };
+      this.savedExams[existingIndex] = savedItem;
+    } else {
+      savedItem = {
+        id: examId,
+        title: cleanTitle,
+        description: exam.description || 'Evaluación de opción múltiple',
+        questions: exam.questions,
+        durationMinutes: exam.durationMinutes || 20,
+        createdAt: now,
+        updatedAt: now
+      };
+      this.savedExams.unshift(savedItem);
+    }
+
+    this.saveSavedExamsToStorage();
+    this.notifySavedExamsListeners();
+    return savedItem;
+  }
+
+  public async deleteSavedExam(id: string): Promise<void> {
+    this.savedExams = this.savedExams.filter((e) => e.id !== id);
+    if (this.savedExams.length === 0) {
+      this.savedExams = [...PREDEFINED_SAVED_EXAMS];
+    }
+    this.saveSavedExamsToStorage();
+    this.notifySavedExamsListeners();
+  }
+
+  public async activateSavedExam(id: string, clearStudents: boolean = false): Promise<SavedExam | null> {
+    const target = this.savedExams.find((e) => e.id === id);
+    if (!target) return null;
+
+    await this.saveActiveExam(target.title, target.questions);
+    if (target.durationMinutes) {
+      this.globalSession.durationMinutes = target.durationMinutes;
+      await this.setGlobalSession({
+        ...this.globalSession,
+        durationMinutes: target.durationMinutes,
+        title: target.title
+      });
+    }
+
+    if (clearStudents) {
+      await this.clearAllStudents();
+    }
+
+    return target;
+  }
+
+  public subscribeToSavedExams(callback: (exams: SavedExam[]) => void): () => void {
+    this.savedExamsListeners.add(callback);
+    callback(this.getSavedExams());
+
+    return () => {
+      this.savedExamsListeners.delete(callback);
+    };
+  }
+
+  private notifySavedExamsListeners() {
+    const copy = [...this.savedExams];
+    this.savedExamsListeners.forEach((fn) => {
+      try {
+        fn(copy);
+      } catch (err) {
+        console.error('Error in savedExams listener:', err);
       }
     });
   }

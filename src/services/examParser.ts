@@ -1,7 +1,6 @@
-import { Question, QuestionType, ColumnPair } from '../types';
+import { Question } from '../types';
 
-export const SAMPLE_PLAIN_TEXT_EXAM = `-- TIPO: OPCION_MULTIPLE --
-PREGUNTA: ¿Qué tipo de enlace químico se forma entre un metal y un no metal por transferencia completa de electrones?
+export const SAMPLE_PLAIN_TEXT_EXAM = `PREGUNTA: ¿Qué tipo de enlace químico se forma entre un metal y un no metal por transferencia completa de electrones?
 IMAGEN: https://images.unsplash.com/photo-1532187863486-abf9dbad1b69?w=800&auto=format&fit=crop&q=80
 A) Enlace Covalente Polar
 B) Enlace Iónico (Electrovalente)
@@ -10,262 +9,296 @@ D) Enlace Covalente Apolar
 CORRECTA: B
 RETROALIMENTACION: El enlace iónico resulta de la gran diferencia de electronegatividad, donde el metal cede electrones formando iones unidos por atracción electrostática.
 
--- TIPO: RELACIONAR --
-PREGUNTA: Relaciona cada sustancia química con su clasificación correspondiente:
-IMAGEN: https://images.unsplash.com/photo-1603126857599-f6e157fa2fe6?w=800&auto=format&fit=crop&q=80
-PAR: NaCl | Sal binaria iónica
-PAR: H2SO4 | Ácido oxácido
-PAR: He | Gas noble
-PAR: NaOH | Base o hidróxido
-RETROALIMENTACION: NaCl es sal neutra, H2SO4 es un ácido fuerte, He es un gas inerte con octeto/dueto completo, y NaOH es un álcali cáustico.
+PREGUNTA: ¿Cuál de las siguientes sustancias químicas corresponde a un ácido oxácido diprótico fuerte?
+A) NaCl (Cloruro de sodio)
+B) H2SO4 (Ácido sulfúrico)
+C) He (Gas helio)
+D) NaOH (Hidróxido de sodio)
+CORRECTA: B
+RETROALIMENTACION: El H2SO4 es un ácido oxácido con azufre en estado de oxidación +6 que se disocia liberando protones.
 
--- TIPO: ABIERTA --
-PREGUNTA: Explica brevemente el principio de conservación de la materia formulado por Antoine Lavoisier y su importancia al balancear reacciones.
-IMAGEN: https://images.unsplash.com/photo-1507668077129-56e32842fceb?w=800&auto=format&fit=crop&q=80
-RESPUESTA_MODELO: La materia no se crea ni se destruye, solo se transforma. La cantidad total de átomos en reactivos debe ser igual a la de productos.
-RETROALIMENTACION: En cualquier reacción química, la suma de las masas de las sustancias reaccionantes es exactamente igual a la suma de las masas de los productos.
+PREGUNTA: Según la Ley de Conservación de la Materia formulada por Antoine Lavoisier, ¿qué principio se cumple en toda reacción química?
+A) La masa total de los reactivos es exactamente igual a la de los productos
+B) La materia desaparece paulatinamente al formarse los enlaces
+C) Los reactivos siempre pesan el doble que los productos
+D) Solo los metales conservan su masa en solución
+CORRECTA: A
+RETROALIMENTACION: La materia no se crea ni se destruye, solo se transforma en átomos reordenados.
 
--- TIPO: OPCION_MULTIPLE --
 PREGUNTA: Si una solución acuosa a 25°C tiene una concentración [H3O+] = 1 x 10^-3 M, ¿cuál es su pH y cómo se clasifica?
 IMAGEN: https://images.unsplash.com/photo-1517048676732-d65bc937f952?w=800&auto=format&fit=crop&q=80
 A) pH = 11, solución fuertemente básica
 B) pH = 3, solución ácida
 C) pH = 7, solución neutra
-D) pH = -3, solución anfótera
+D) pH = 14, solución alcalina
 CORRECTA: B
-RETROALIMENTACION: pH = -log[H3O+] = -log(10^-3) = 3. Todo pH menor a 7 a 25°C indica una disolución ácida.`;
+RETROALIMENTACION: pH = -log[H3O+] = -log(10^-3) = 3. Todo pH menor a 7 a 25°C indica disolución ácida.`;
 
 export interface ParseResult {
   questions: Question[];
-  errors: string[];
+  warnings: string[];
+  errors: string[]; // For UI backwards compatibility, always empty or non-blocking
 }
 
+/**
+ * Robust, zero-error parser dedicated exclusively to Multiple-Choice questions.
+ * Handles diverse styles (A), a), 1., PREGUNTA:, ¿...?, asterisks for correct answers, etc.)
+ */
 export function parsePlainTextExam(text: string): ParseResult {
-  const errors: string[] = [];
+  const warnings: string[] = [];
   const questions: Question[] = [];
 
   if (!text || !text.trim()) {
-    return { questions: [], errors: ['El texto está vacío. Por favor pega las preguntas del examen.'] };
-  }
-
-  // Normalize line endings
-  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-
-  // Split into blocks either by "-- TIPO:" or by "PREGUNTA:"
-  // Regex looks for either ^--\s*TIPO: or ^PREGUNTA\s*:
-  const rawBlocks = normalized
-    .split(/(?=^(?:--\s*TIPO\s*:|PREGUNTA\s*:))/gmi)
-    .map((b) => b.trim())
-    .filter(Boolean);
-
-  if (rawBlocks.length === 0) {
     return {
       questions: [],
-      errors: ['No se detectaron preguntas. Asegúrate de incluir etiquetas "PREGUNTA:" o "-- TIPO: --".']
+      warnings: [],
+      errors: ['El texto está vacío. Pega tus preguntas de opción múltiple.']
     };
   }
 
-  rawBlocks.forEach((block, index) => {
-    const qNum = index + 1;
-    const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+  // Normalize line breaks
+  const cleanText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
 
-    let explicitType: QuestionType | null = null;
+  // Split into raw blocks:
+  // Detect delimiters like "PREGUNTA:", "Pregunta 1:", "1.", "1)", "-- TIPO", or double linebreaks before a question-like line
+  const lines = cleanText.split('\n');
+  const rawBlocks: string[][] = [];
+  let currentBlock: string[] = [];
+
+  const isQuestionStart = (line: string): boolean => {
+    const l = line.trim();
+    if (!l) return false;
+    // PREGUNTA: ...
+    if (/^(?:--\s*TIPO.*?--|PREGUNTA\s*\d*\s*[:\.]|REACTIVO\s*\d*\s*[:\.]|ITEM\s*\d*\s*[:\.])/i.test(l)) {
+      return true;
+    }
+    // Numbered questions: 1. ¿... or 1) ¿... or 1.- ...
+    if (/^\d+[\.\)\-]\s+/.test(l)) {
+      return true;
+    }
+    // Standalone question marks ¿...?
+    if (/^¿.+[?]$/.test(l)) {
+      return true;
+    }
+    return false;
+  };
+
+  for (const line of lines) {
+    if (isQuestionStart(line) && currentBlock.length > 0) {
+      rawBlocks.push(currentBlock);
+      currentBlock = [line];
+    } else {
+      currentBlock.push(line);
+    }
+  }
+  if (currentBlock.length > 0) {
+    rawBlocks.push(currentBlock);
+  }
+
+  // If no blocks were split by start tags, fallback to double-newline separation
+  const blocksToProcess = rawBlocks.length > 0 
+    ? rawBlocks 
+    : cleanText.split(/\n\s*\n/).map((b) => b.split('\n'));
+
+  blocksToProcess.forEach((blockLines, index) => {
+    const qNum = index + 1;
+    const nonEmptyLines = blockLines.map((l) => l.trim()).filter(Boolean);
+    if (nonEmptyLines.length === 0) return;
+
     let questionText = '';
     let imageUrl = '';
-    let correctLetter = '';
-    let referenceAnswer = '';
+    let formula = '';
     let explanationText = '';
-    const optionsMap: Record<string, string> = {};
-    const pairs: ColumnPair[] = [];
+    let explicitCorrectKey = '';
+    const rawOptions: { letter: string; text: string; isMarkedCorrect?: boolean }[] = [];
 
-    let currentSection: 'question' | 'explanation' | 'reference' | 'none' = 'none';
+    let isCollectingQuestion = false;
+    let isCollectingExplanation = false;
 
-    for (const line of lines) {
-      // -- TIPO: OPCION_MULTIPLE / ABIERTA / RELACIONAR --
-      const typeMatch = line.match(/^--\s*TIPO\s*:\s*([A-Za-z_]+)\s*--?$/i);
-      if (typeMatch) {
-        const rawType = typeMatch[1].toLowerCase();
-        if (rawType.includes('opcion') || rawType.includes('multiple')) {
-          explicitType = 'opcion_multiple';
-        } else if (rawType.includes('abierta') || rawType.includes('desarrollo')) {
-          explicitType = 'abierta';
-        } else if (rawType.includes('relacion') || rawType.includes('columna') || rawType.includes('parear')) {
-          explicitType = 'relacionar';
-        }
+    for (const line of nonEmptyLines) {
+      // Ignore type tags since all questions are strictly Multiple-Choice
+      if (/^--\s*TIPO.*?--$/i.test(line)) {
         continue;
       }
 
-      // IMAGEN: https://...
-      const imgMatch = line.match(/^(?:IMAGEN|IMAGE|IMG)\s*:\s*(https?:\/\/[^\s]+)$/i);
+      // Check for image
+      const imgMatch = line.match(/^(?:IMAGEN|IMAGE|IMG|FOTO)\s*[:\=]\s*(https?:\/\/[^\s]+)$/i);
       if (imgMatch) {
         imageUrl = imgMatch[1].trim();
         continue;
       }
 
-      // PREGUNTA: ...
-      const qMatch = line.match(/^PREGUNTA\s*:\s*(.+)$/i);
-      if (qMatch) {
-        questionText = qMatch[1].trim();
-        currentSection = 'question';
+      // Check for formula
+      const formulaMatch = line.match(/^(?:FORMULA|FÓRMULA|ECUACION|ECUACIÓN)\s*[:\=]\s*(.+)$/i);
+      if (formulaMatch) {
+        formula = formulaMatch[1].trim();
         continue;
       }
 
-      // PAR: Elemento A | Elemento B
-      const pairMatch = line.match(/^(?:PAR|PAIR|COLUMNA)\s*:\s*(.+?)\s*\|\s*(.+)$/i);
-      if (pairMatch) {
-        currentSection = 'none';
-        pairs.push({
-          id: `pair_${pairs.length + 1}`,
-          left: pairMatch[1].trim(),
-          right: pairMatch[2].trim()
+      // Check for Explicit Question tag
+      const qTagMatch = line.match(/^(?:PREGUNTA\s*\d*\s*[:\.]|REACTIVO\s*\d*\s*[:\.]|ITEM\s*\d*\s*[:\.]|\d+[\.\)\-]\s+)(.+)$/i);
+      if (qTagMatch) {
+        questionText = qTagMatch[1].trim();
+        isCollectingQuestion = true;
+        isCollectingExplanation = false;
+        continue;
+      }
+
+      // Check for Correct Answer key
+      const correctMatch = line.match(/^(?:CORRECTA|RESPUESTA(?:\s+CORRECTA)?|CLAVE|SOLUCION|SOLUCIÓN|OPCION\s+CORRECTA|R)\s*[:\=\-]\s*([A-Fa-f0-9])/i);
+      if (correctMatch) {
+        explicitCorrectKey = correctMatch[1].toUpperCase();
+        isCollectingQuestion = false;
+        isCollectingExplanation = false;
+        continue;
+      }
+
+      // Check for Explanation / Feedback
+      const retroMatch = line.match(/^(?:RETROALIMENTACION|RETROALIMENTACIÓN|EXPLICACION|EXPLICACIÓN|JUSTIFICACION|JUSTIFICACIÓN)\s*[:\=]\s*(.*)$/i);
+      if (retroMatch) {
+        explanationText = retroMatch[1].trim();
+        isCollectingExplanation = true;
+        isCollectingQuestion = false;
+        continue;
+      }
+
+      // Check for Option format:
+      // A) Option, [A] Option, (A) Option, A. Option, A - Option, or * A) Option (asterisk for correct)
+      const optMatch = line.match(/^(\*)?\s*(?:\[?([A-Fa-f])\]?[\)\.\:\-]|(?:\(([A-Fa-f])\)))\s*(.+)$/);
+      if (optMatch) {
+        isCollectingQuestion = false;
+        isCollectingExplanation = false;
+        const isAsterisk = Boolean(optMatch[1]);
+        const letter = (optMatch[2] || optMatch[3]).toUpperCase();
+        let optionText = optMatch[4].trim();
+
+        // Check if marked as correct in the text e.g. "Oxígeno (Correcta)"
+        let marked = isAsterisk;
+        if (/\((?:correcta|respuesta|verdadera|clave)\)/i.test(optionText)) {
+          marked = true;
+          optionText = optionText.replace(/\((?:correcta|respuesta|verdadera|clave)\)/i, '').trim();
+        }
+
+        rawOptions.push({
+          letter,
+          text: optionText,
+          isMarkedCorrect: marked
         });
         continue;
       }
 
-      // OPTION: A) Opción 1, B) Opción 2...
-      const optMatch = line.match(/^([A-Da-d])[\)\.\:\-]\s*(.+)$/);
-      if (optMatch) {
-        currentSection = 'none';
-        const letter = optMatch[1].toUpperCase();
-        optionsMap[letter] = optMatch[2].trim();
-        continue;
-      }
-
-      // CORRECTA: A/B/C/D
-      const correctMatch = line.match(/^(?:CORRECTA|RESPUESTA|RESPUESTA CORRECTA)\s*:\s*([A-Da-d0-9])/i);
-      if (correctMatch) {
-        currentSection = 'none';
-        correctLetter = correctMatch[1].toUpperCase();
-        continue;
-      }
-
-      // RESPUESTA_MODELO / RESPUESTA_ESPERADA:
-      const refMatch = line.match(/^(?:RESPUESTA_MODELO|RESPUESTA_ESPERADA|CRITERIO)\s*:\s*(.*)$/i);
-      if (refMatch) {
-        referenceAnswer = refMatch[1].trim();
-        currentSection = 'reference';
-        continue;
-      }
-
-      // RETROALIMENTACION:
-      const retroMatch = line.match(/^(?:RETROALIMENTACION|RETROALIMENTACIÓN|EXPLICACION|EXPLICACIÓN)\s*:\s*(.*)$/i);
-      if (retroMatch) {
-        explanationText = retroMatch[1].trim();
-        currentSection = 'explanation';
+      // If we don't have a question text yet, the first line is the question text!
+      if (!questionText) {
+        // Strip leading number if present like "1. ¿Qué es...?"
+        questionText = line.replace(/^\d+[\.\)\-]\s*/, '').trim();
+        isCollectingQuestion = true;
         continue;
       }
 
       // Continuation lines
-      if (currentSection === 'question') {
-        questionText += ' ' + line;
-      } else if (currentSection === 'explanation') {
+      if (isCollectingExplanation) {
         explanationText += ' ' + line;
-      } else if (currentSection === 'reference') {
-        referenceAnswer += ' ' + line;
+      } else if (isCollectingQuestion) {
+        questionText += ' ' + line;
+      } else if (rawOptions.length > 0) {
+        // Multi-line option continuation
+        rawOptions[rawOptions.length - 1].text += ' ' + line;
       }
     }
 
+    // Clean up question text
+    questionText = questionText.trim();
     if (!questionText) {
-      errors.push(`Bloque #${qNum}: Falta el enunciado de la pregunta (PREGUNTA:).`);
+      // If block had no text, skip gracefully
       return;
     }
 
-    // Determine type if not explicit
-    let detectedType: QuestionType = explicitType || 'opcion_multiple';
-    if (!explicitType) {
-      if (pairs.length >= 2) {
-        detectedType = 'relacionar';
-      } else if (Object.keys(optionsMap).length >= 2) {
-        detectedType = 'opcion_multiple';
-      } else {
-        detectedType = 'abierta';
+    // Process Options: strictly Multiple Choice
+    const finalOptions: string[] = [];
+    let detectedCorrectIdx = -1;
+
+    // Check if options were parsed
+    if (rawOptions.length >= 2) {
+      rawOptions.forEach((opt, optIdx) => {
+        finalOptions.push(opt.text);
+        if (opt.isMarkedCorrect) {
+          detectedCorrectIdx = optIdx;
+        } else if (explicitCorrectKey && opt.letter === explicitCorrectKey) {
+          detectedCorrectIdx = optIdx;
+        }
+      });
+    } else if (rawOptions.length === 1) {
+      // Only 1 option provided, safely add fallback options so it doesn't crash
+      finalOptions.push(rawOptions[0].text);
+      finalOptions.push('Ninguna de las opciones anteriores');
+      detectedCorrectIdx = 0;
+      warnings.push(`Pregunta #${qNum}: Se agregó una segunda opción automática para cumplir formato de opción múltiple.`);
+    } else {
+      // No standard A) B) letters detected; try to convert lines or create True/False options
+      finalOptions.push('Verdadero');
+      finalOptions.push('Falso');
+      detectedCorrectIdx = 0;
+      warnings.push(`Pregunta #${qNum}: Se adaptó a Verdadero/Falso al no detectar incisos A) y B).`);
+    }
+
+    // If explicit key was numeric e.g. CORRECTA: 1
+    if (detectedCorrectIdx === -1 && explicitCorrectKey) {
+      const numKey = parseInt(explicitCorrectKey, 10);
+      if (!isNaN(numKey) && numKey >= 1 && numKey <= finalOptions.length) {
+        detectedCorrectIdx = numKey - 1;
+      } else if (['A', 'B', 'C', 'D', 'E', 'F'].includes(explicitCorrectKey)) {
+        detectedCorrectIdx = explicitCorrectKey.charCodeAt(0) - 65;
       }
     }
 
-    // Process per question type
-    if (detectedType === 'relacionar') {
-      if (pairs.length < 2) {
-        errors.push(`Pregunta #${qNum} (Relacionar): Se requieren al menos 2 pares con formato "PAR: Izquierda | Derecha".`);
-        return;
-      }
+    // Safety fallback: if no correct option specified, default to 0 (Option A) with zero errors
+    if (detectedCorrectIdx < 0 || detectedCorrectIdx >= finalOptions.length) {
+      detectedCorrectIdx = 0;
+      warnings.push(`Pregunta #${qNum}: Se asignó la opción A como respuesta correcta por defecto.`);
+    }
 
-      questions.push({
-        id: `q_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 6)}`,
-        type: 'relacionar',
-        topic: 'Relación de Conceptos',
-        question: questionText,
-        imageUrl: imageUrl || undefined,
-        pairs,
-        explanation: explanationText || 'Relaciona cada elemento de la izquierda con su par exacto a la derecha.',
-        points: 25
-      });
-    } else if (detectedType === 'abierta') {
-      questions.push({
-        id: `q_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 6)}`,
-        type: 'abierta',
-        topic: 'Pregunta de Desarrollo',
-        question: questionText,
-        imageUrl: imageUrl || undefined,
-        referenceAnswer: referenceAnswer || undefined,
-        explanation: explanationText || referenceAnswer || 'Pregunta abierta evaluada con base en criterios pedagógicos.',
-        points: 25
-      });
+    const correctLetter = String.fromCharCode(65 + detectedCorrectIdx);
+    const finalExplanation = explanationText.trim() 
+      || `La respuesta correcta es la opción ${correctLetter}: ${finalOptions[detectedCorrectIdx]}.`;
+
+    questions.push({
+      id: `q_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 7)}`,
+      type: 'opcion_multiple',
+      topic: 'Opción Múltiple',
+      question: questionText,
+      imageUrl: imageUrl || undefined,
+      formula: formula || undefined,
+      options: finalOptions,
+      correctAnswer: detectedCorrectIdx,
+      explanation: finalExplanation,
+      points: 25 // will be rebalanced below
+    });
+  });
+
+  // If no questions were successfully created, return helpful error
+  if (questions.length === 0) {
+    return {
+      questions: [],
+      warnings: [],
+      errors: ['No se detectaron preguntas válidas. Puedes cargar la plantilla de ejemplo para guiarte.']
+    };
+  }
+
+  // Rebalance points to sum exactly 100 points
+  const pointsPerQuestion = Math.max(1, Math.round(100 / questions.length));
+  let runningSum = 0;
+  questions.forEach((q, idx) => {
+    if (idx === questions.length - 1) {
+      q.points = Math.max(1, 100 - runningSum);
     } else {
-      // OPCION_MULTIPLE
-      const optionLetters = ['A', 'B', 'C', 'D'];
-      const availableOptions: string[] = [];
-
-      for (const l of optionLetters) {
-        if (optionsMap[l]) availableOptions.push(optionsMap[l]);
-      }
-
-      if (availableOptions.length < 2) {
-        errors.push(`Pregunta #${qNum} (Opción Múltiple): Debe tener al menos 2 opciones (A, B).`);
-        return;
-      }
-
-      let correctIndex = -1;
-      if (correctLetter) {
-        if (['A', 'B', 'C', 'D'].includes(correctLetter)) {
-          correctIndex = correctLetter.charCodeAt(0) - 65;
-        } else {
-          const num = parseInt(correctLetter, 10);
-          if (!isNaN(num) && num >= 1 && num <= availableOptions.length) {
-            correctIndex = num - 1;
-          }
-        }
-      }
-
-      if (correctIndex < 0 || correctIndex >= availableOptions.length) {
-        errors.push(`Pregunta #${qNum}: La opción correcta "${correctLetter || 'vacía'}" no es válida para las opciones disponibles.`);
-        return;
-      }
-
-      questions.push({
-        id: `q_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 6)}`,
-        type: 'opcion_multiple',
-        topic: 'Opción Múltiple',
-        question: questionText,
-        imageUrl: imageUrl || undefined,
-        options: availableOptions,
-        correctAnswer: correctIndex,
-        explanation: explanationText || `La respuesta correcta es la opción ${String.fromCharCode(65 + correctIndex)}: ${availableOptions[correctIndex]}.`,
-        points: 25
-      });
+      q.points = pointsPerQuestion;
+      runningSum += pointsPerQuestion;
     }
   });
 
-  // Calculate dynamic point distribution to equal 100 points
-  if (questions.length > 0) {
-    const ptsPerQ = Math.round(100 / questions.length);
-    questions.forEach((q, idx) => {
-      if (idx === questions.length - 1) {
-        q.points = 100 - ptsPerQ * (questions.length - 1);
-      } else {
-        q.points = ptsPerQ;
-      }
-    });
-  }
-
-  return { questions, errors };
+  return {
+    questions,
+    warnings,
+    errors: []
+  };
 }

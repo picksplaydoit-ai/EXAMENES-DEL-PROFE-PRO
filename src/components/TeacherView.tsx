@@ -31,10 +31,12 @@ import {
   AlignLeft,
   Check,
   StopCircle,
-  Award
+  Award,
+  FolderOpen,
+  BookOpen
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { StudentExamState, Question, GlobalSessionState } from '../types';
+import { StudentExamState, Question, GlobalSessionState, SavedExam } from '../types';
 import { firebaseService, ExamDataPayload } from '../services/firebaseService';
 import { ExamLoaderModal } from './ExamLoaderModal';
 import { QRCodeModal } from './QRCodeModal';
@@ -56,12 +58,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   // Active Exam & Global Session State
   const [examData, setExamData] = useState<ExamDataPayload>(firebaseService.getActiveExam());
+  const [savedExams, setSavedExams] = useState<SavedExam[]>(firebaseService.getSavedExams());
   const [globalSession, setGlobalSession] = useState<GlobalSessionState>(firebaseService.getGlobalSession());
   const [customDurationMinutes, setCustomDurationMinutes] = useState<number>(20);
   const [remainingSessionSeconds, setRemainingSessionSeconds] = useState<number>(20 * 60);
 
   // Modals & Confirmation States
   const [isExamLoaderOpen, setIsExamLoaderOpen] = useState(false);
+  const [examLoaderTab, setExamLoaderTab] = useState<'create' | 'library'>('create');
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
   const [clearSuccessToast, setClearSuccessToast] = useState(false);
@@ -107,10 +111,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       }
     });
 
+    const unsubSaved = firebaseService.subscribeToSavedExams((exams) => {
+      setSavedExams(exams);
+    });
+
     return () => {
       unsubStudents();
       unsubExam();
       unsubSession();
+      unsubSaved();
     };
   }, []);
 
@@ -164,6 +173,23 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const showNotification = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  const handleQuickSwitchExam = async (examId: string) => {
+    const activated = await firebaseService.activateSavedExam(examId, false);
+    if (activated) {
+      showNotification(`✓ Examen activo cambiado a: "${activated.title}"`);
+    }
+  };
+
+  const handleOpenCreateNewExam = () => {
+    setExamLoaderTab('create');
+    setIsExamLoaderOpen(true);
+  };
+
+  const handleOpenSavedExamsLibrary = () => {
+    setExamLoaderTab('library');
+    setIsExamLoaderOpen(true);
   };
 
   // Start Exam For Everyone
@@ -633,49 +659,72 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       {/* EXAM CONTROL & QR COMMAND BAR */}
       <div className="bg-gradient-to-br from-slate-800/90 via-slate-850 to-slate-900 rounded-3xl border border-slate-700/80 p-5 sm:p-6 shadow-2xl backdrop-blur-md">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          {/* Active Exam Metadata */}
+          {/* Active Exam Metadata & Quick Switcher */}
           <div className="flex items-start space-x-4">
             <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center text-white shadow-lg shrink-0">
-              <FileText className="w-6 h-6" />
+              <BookOpen className="w-6 h-6" />
             </div>
             <div>
-              <div className="flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
                   Examen Activo en Tiempo Real
                 </span>
-                <span className="text-xs text-slate-400">
-                  • {activeQuestions.length} reactivos ({totalExamPoints} pts)
+                <span className="text-xs text-slate-400 font-mono">
+                  • {activeQuestions.length} reactivos ({totalExamPoints} pts) • Opción Múltiple
                 </span>
               </div>
               <h2 className="text-xl sm:text-2xl font-black text-white mt-1">
                 {examData.title}
               </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Cualquier cambio realizado en las preguntas se sincroniza automáticamente con los alumnos conectados.
-              </p>
+              
+              {/* Quick Exam Selector Dropdown */}
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-slate-400 font-bold uppercase text-[10px]">Cambiar Examen:</span>
+                <select
+                  value={savedExams.find((e) => e.title === examData.title)?.id || ''}
+                  onChange={(e) => handleQuickSwitchExam(e.target.value)}
+                  className="bg-slate-950/80 border border-slate-700 hover:border-indigo-500/60 rounded-xl px-2.5 py-1 text-xs text-indigo-200 font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  {savedExams.map((ex) => (
+                    <option key={ex.id} value={ex.id} className="bg-slate-900 text-white">
+                      {ex.title} ({ex.questions.length} preguntas)
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
 
-          {/* Action Buttons: Load Exam, QR Code & Reset Database */}
+          {/* Action Buttons: Crear Nuevo Examen, Mis Exámenes, QR Code & Reset Database */}
           <div className="flex flex-wrap items-center gap-2.5">
-            {/* Load Plain Text Exam */}
+            {/* Crear Nuevo Examen */}
             <button
               type="button"
-              onClick={() => setIsExamLoaderOpen(true)}
-              className="px-4 py-2.5 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 shadow-md shadow-indigo-600/25 transition-all flex items-center space-x-2"
+              onClick={handleOpenCreateNewExam}
+              className="px-4 py-2.5 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 shadow-md shadow-indigo-600/30 transition-all flex items-center space-x-1.5 transform active:scale-95"
             >
-              <FileText className="w-4 h-4" />
-              <span>Cargar Examen (Texto Plano)</span>
+              <PlusCircle className="w-4 h-4" />
+              <span>Crear Nuevo Examen</span>
             </button>
 
-            {/* View QR Code */}
+            {/* Mis Exámenes Guardados */}
+            <button
+              type="button"
+              onClick={handleOpenSavedExamsLibrary}
+              className="px-3.5 py-2.5 rounded-xl font-bold text-xs text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-all flex items-center space-x-1.5"
+            >
+              <FolderOpen className="w-4 h-4 text-indigo-400" />
+              <span>Mis Exámenes ({savedExams.length})</span>
+            </button>
+
+            {/* View QR Code (with Start Exam inside) */}
             <button
               type="button"
               onClick={() => setIsQrModalOpen(true)}
-              className="px-4 py-2.5 rounded-xl font-bold text-xs text-slate-100 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 shadow-sm transition-all flex items-center space-x-2"
+              className="px-4 py-2.5 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-md shadow-emerald-600/25 border border-emerald-500/40 transition-all flex items-center space-x-2"
             >
-              <QrCode className="w-4 h-4 text-pink-400" />
-              <span>Mostrar Código QR</span>
+              <QrCode className="w-4 h-4 text-white" />
+              <span>Código QR & Iniciar</span>
             </button>
 
             {/* Clear Database Results */}
@@ -683,10 +732,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               type="button"
               onClick={() => setIsClearConfirmOpen(true)}
               title="Borra los intentos anteriores de los alumnos para iniciar con un nuevo grupo"
-              className="px-3.5 py-2.5 rounded-xl font-bold text-xs text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-all flex items-center space-x-1.5"
+              className="px-3 py-2.5 rounded-xl font-bold text-xs text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-all flex items-center space-x-1.5"
             >
               <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
-              <span>Limpiar / Nuevo Grupo</span>
+              <span>Nuevo Grupo</span>
             </button>
           </div>
         </div>
@@ -1321,6 +1370,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       {/* MODALS */}
       <ExamLoaderModal
         isOpen={isExamLoaderOpen}
+        initialTab={examLoaderTab}
         onClose={() => setIsExamLoaderOpen(false)}
         onExamLoaded={(title, questions) => {
           setExamData({ title, questions, updatedAt: Date.now() });
@@ -1331,6 +1381,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         isOpen={isQrModalOpen}
         onClose={() => setIsQrModalOpen(false)}
         examTitle={examData.title}
+        globalSession={globalSession}
+        waitingStudentsCount={waitingStudents.length}
+        initialDurationMinutes={customDurationMinutes}
+        onStartExam={handleStartExamForEveryone}
+        onPauseExam={handleResetSessionToWaitingRoom}
+        onFinishExam={handleFinishExam}
+        onExportExcel={handleExportExcel}
       />
 
       {/* CONFIRM CLEAR DATABASE MODAL */}

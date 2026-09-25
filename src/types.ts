@@ -27,6 +27,16 @@ export interface CheatLog {
   warningNumber: number;
 }
 
+export interface SavedExam {
+  id: string;
+  title: string;
+  description?: string;
+  questions: Question[];
+  durationMinutes: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type StudentStatus = 'not_started' | 'waiting' | 'in_progress' | 'submitted' | 'forced_submission_cheat';
 
 export interface StudentExamState {
