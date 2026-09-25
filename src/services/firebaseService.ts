@@ -6,6 +6,7 @@ import {
   Firestore, 
   doc, 
   setDoc, 
+  getDoc,
   onSnapshot, 
   deleteDoc, 
   collection, 
@@ -123,28 +124,79 @@ class FirebaseDualService {
   }
 
   private initBroadcastChannel() {
-    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-      try {
-        this.broadcastChannel = new BroadcastChannel(CHANNEL_NAME);
-        this.broadcastChannel.onmessage = (event) => {
-          if (event.data?.type === 'STUDENT_UPDATE') {
-            const student = event.data.payload as StudentExamState;
-            this.localStudentsCache[student.id] = student;
-            this.notifyListeners();
-          } else if (event.data?.type === 'STUDENTS_RESET') {
-            this.localStudentsCache = event.data.payload || {};
-            this.notifyListeners();
-          } else if (event.data?.type === 'EXAM_DATA_UPDATE') {
-            this.activeExamData = event.data.payload as ExamDataPayload;
-            this.notifyExamListeners();
-          } else if (event.data?.type === 'SESSION_UPDATE') {
-            this.globalSession = event.data.payload as GlobalSessionState;
-            this.notifySessionListeners();
-          }
-        };
-      } catch (err) {
-        console.warn('BroadcastChannel not supported or restricted:', err);
+    if (typeof window !== 'undefined') {
+      if ('BroadcastChannel' in window) {
+        try {
+          this.broadcastChannel = new BroadcastChannel(CHANNEL_NAME);
+          this.broadcastChannel.onmessage = (event) => {
+            if (event.data?.type === 'STUDENT_UPDATE') {
+              const student = event.data.payload as StudentExamState;
+              this.localStudentsCache[student.id] = student;
+              this.notifyListeners();
+            } else if (event.data?.type === 'STUDENTS_RESET') {
+              this.localStudentsCache = event.data.payload || {};
+              this.notifyListeners();
+            } else if (event.data?.type === 'EXAM_DATA_UPDATE') {
+              this.activeExamData = event.data.payload as ExamDataPayload;
+              this.notifyExamListeners();
+            } else if (event.data?.type === 'SESSION_UPDATE') {
+              this.globalSession = event.data.payload as GlobalSessionState;
+              this.notifySessionListeners();
+            }
+          };
+        } catch (err) {
+          console.warn('BroadcastChannel not supported or restricted:', err);
+        }
       }
+
+      // Cross-tab synchronization via localStorage events (vital for same-device student & teacher testing)
+      window.addEventListener('storage', (event) => {
+        if (event.key === STORAGE_KEY_EXAM_DATA && event.newValue) {
+          try {
+            const parsed = JSON.parse(event.newValue) as ExamDataPayload;
+            if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+              this.activeExamData = parsed;
+              this.notifyExamListeners();
+            }
+          } catch {
+            // Ignore
+          }
+        } else if (event.key === STORAGE_KEY_SESSION_DATA && event.newValue) {
+          try {
+            const parsed = JSON.parse(event.newValue) as GlobalSessionState;
+            if (parsed && parsed.status) {
+              this.globalSession = parsed;
+              this.notifySessionListeners();
+            }
+          } catch {
+            // Ignore
+          }
+        } else if (event.key === STORAGE_KEY_STUDENTS_LOCAL && event.newValue) {
+          try {
+            const parsed = JSON.parse(event.newValue);
+            if (parsed) {
+              this.localStudentsCache = parsed;
+              this.notifyListeners();
+            }
+          } catch {
+            // Ignore
+          }
+        }
+      });
+
+      // Custom window event listener for in-app synchronous updates
+      window.addEventListener('quimica:exam_sync', (event: any) => {
+        if (event.detail) {
+          this.activeExamData = event.detail;
+          this.notifyExamListeners();
+        }
+      });
+      window.addEventListener('quimica:session_sync', (event: any) => {
+        if (event.detail) {
+          this.globalSession = event.detail;
+          this.notifySessionListeners();
+        }
+      });
     }
   }
 
@@ -468,11 +520,19 @@ class FirebaseDualService {
 
     this.notifyExamListeners();
 
-    // Save to Firestore
+    if (typeof window !== 'undefined') {
+      try {
+        window.dispatchEvent(new CustomEvent('quimica:exam_sync', { detail: payload }));
+      } catch {
+        // Ignore
+      }
+    }
+
+    // Save to Firestore (full overwrite so new questions replace old ones cleanly)
     if (this.firestore) {
       try {
         const examDocRef = doc(this.firestore, 'exams', 'quimica_general_2026');
-        await setDoc(examDocRef, payload, { merge: true });
+        await setDoc(examDocRef, payload);
       } catch (err) {
         if ((err as { code?: string })?.code === 'permission-denied') {
           handleFirestoreError(err, OperationType.WRITE, 'exams/quimica_general_2026');
@@ -767,11 +827,36 @@ class FirebaseDualService {
 
       // 2. Exam document listener
       const examDocRef = doc(this.firestore, 'exams', 'quimica_general_2026');
+      
+      // Fetch immediately on boot so student doesn't wait for onSnapshot
+      getDoc(examDocRef).then((snap) => {
+        if (snap.exists()) {
+          const val = snap.data() as ExamDataPayload;
+          if (val && Array.isArray(val.questions) && val.questions.length > 0) {
+            this.activeExamData = val;
+            try {
+              localStorage.setItem(STORAGE_KEY_EXAM_DATA, JSON.stringify(val));
+            } catch {}
+            this.notifyExamListeners();
+          }
+        } else {
+          // Document does not exist in Firestore yet: seed it with activeExamData
+          setDoc(examDocRef, this.activeExamData).catch((err) => {
+            console.warn('Auto-seed exam doc notice:', err);
+          });
+        }
+      }).catch((err) => {
+        console.warn('Initial exam getDoc note (will rely on snapshot/cache):', err);
+      });
+
       this.firestoreExamUnsub = onSnapshot(examDocRef, (docSnap) => {
         if (docSnap.exists()) {
           const val = docSnap.data() as ExamDataPayload;
           if (val && Array.isArray(val.questions) && val.questions.length > 0) {
             this.activeExamData = val;
+            try {
+              localStorage.setItem(STORAGE_KEY_EXAM_DATA, JSON.stringify(val));
+            } catch {}
             this.notifyExamListeners();
           }
         }
@@ -779,17 +864,40 @@ class FirebaseDualService {
         if (error.code === 'permission-denied') {
           handleFirestoreError(error, OperationType.GET, 'exams/quimica_general_2026');
         } else {
-          console.warn('Firestore exam listener warning:', error);
+          console.warn('Firestore exam listener warning (operating offline):', error);
         }
       });
 
       // 3. Session document listener
       const sessionDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'session', 'current');
+      
+      getDoc(sessionDocRef).then((snap) => {
+        if (snap.exists()) {
+          const val = snap.data() as GlobalSessionState;
+          if (val && val.status) {
+            this.globalSession = val;
+            try {
+              localStorage.setItem(STORAGE_KEY_SESSION_DATA, JSON.stringify(val));
+            } catch {}
+            this.notifySessionListeners();
+          }
+        } else {
+          setDoc(sessionDocRef, this.globalSession).catch((err) => {
+            console.warn('Auto-seed session doc notice:', err);
+          });
+        }
+      }).catch((err) => {
+        console.warn('Initial session getDoc note:', err);
+      });
+
       this.firestoreSessionUnsub = onSnapshot(sessionDocRef, (docSnap) => {
         if (docSnap.exists()) {
           const val = docSnap.data() as GlobalSessionState;
           if (val && val.status) {
             this.globalSession = val;
+            try {
+              localStorage.setItem(STORAGE_KEY_SESSION_DATA, JSON.stringify(val));
+            } catch {}
             this.notifySessionListeners();
           }
         }
@@ -810,6 +918,8 @@ class FirebaseDualService {
   private setupRTDBListeners() {
     if (!this.db) return;
     if (this.rtdbStudentsUnsub) this.rtdbStudentsUnsub();
+    if (this.rtdbExamUnsub) this.rtdbExamUnsub();
+    if (this.rtdbSessionUnsub) this.rtdbSessionUnsub();
 
     try {
       const studentsRef = ref(this.db, DB_BASE_PATH);
@@ -819,6 +929,30 @@ class FirebaseDualService {
           this.localStudentsCache = val || {};
           this.saveLocalCache();
           this.notifyListeners();
+        }
+      });
+
+      const examRef = ref(this.db, DB_EXAM_PATH);
+      this.rtdbExamUnsub = onValue(examRef, (snapshot) => {
+        const val = snapshot.val();
+        if (val && Array.isArray(val.questions) && val.questions.length > 0 && !this.firestore) {
+          this.activeExamData = val;
+          try {
+            localStorage.setItem(STORAGE_KEY_EXAM_DATA, JSON.stringify(val));
+          } catch {}
+          this.notifyExamListeners();
+        }
+      });
+
+      const sessionRef = ref(this.db, DB_SESSION_PATH);
+      this.rtdbSessionUnsub = onValue(sessionRef, (snapshot) => {
+        const val = snapshot.val();
+        if (val && val.status && !this.firestore) {
+          this.globalSession = val;
+          try {
+            localStorage.setItem(STORAGE_KEY_SESSION_DATA, JSON.stringify(val));
+          } catch {}
+          this.notifySessionListeners();
         }
       });
     } catch (err) {

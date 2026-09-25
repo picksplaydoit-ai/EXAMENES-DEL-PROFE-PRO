@@ -18,7 +18,9 @@ import {
   ArrowRightLeft,
   AlignLeft,
   Volume2,
-  AlertCircle
+  AlertCircle,
+  WifiOff,
+  Wifi
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Question, StudentExamState, CheatLog, StudentStatus, GlobalSessionState } from '../types';
@@ -32,6 +34,8 @@ interface StudentViewProps {
   isStudentOnly?: boolean;
 }
 
+const STORAGE_KEY_STUDENT_SESSION = 'quimica_active_student_session_v2';
+
 export const StudentView: React.FC<StudentViewProps> = ({ 
   onSwitchToTeacher,
   isStudentOnly = false
@@ -43,6 +47,12 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   const activeQuestions: Question[] = examData.questions || [];
   const totalExamPoints = activeQuestions.reduce((acc, q) => acc + q.points, 0) || 100;
+
+  // Network drop resilience state
+  const [isOnline, setIsOnline] = useState<boolean>(() => 
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+  const [justReconnected, setJustReconnected] = useState(false);
 
   // Registration State
   const [fullName, setFullName] = useState('');
@@ -68,10 +78,69 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [isSubmitConfirmOpen, setIsSubmitConfirmOpen] = useState(false);
   const [examSubmittedTime, setExamSubmittedTime] = useState<number | undefined>(undefined);
 
-  // Synchronize with Firebase
+  // 1. Restore previous active session from localStorage so reload/network drops do not close exam
   useEffect(() => {
-    const unsubExam = firebaseService.subscribeToExam((data) => setExamData(data));
-    const unsubSession = firebaseService.subscribeToGlobalSession((session) => setGlobalSession(session));
+    try {
+      const savedSession = localStorage.getItem(STORAGE_KEY_STUDENT_SESSION);
+      if (savedSession) {
+        const parsed = JSON.parse(savedSession);
+        if (parsed && parsed.matricula && parsed.examStatus !== 'submitted' && parsed.examStatus !== 'forced_submission_cheat') {
+          setMatricula(parsed.matricula);
+          setFullName(parsed.fullName || '');
+          setHasAcceptedRules(Boolean(parsed.hasAcceptedRules));
+          setIsRegistered(Boolean(parsed.isRegistered));
+          setIsExamStarted(Boolean(parsed.isExamStarted));
+          if (parsed.examStatus) setExamStatus(parsed.examStatus);
+          if (typeof parsed.currentQuestionIdx === 'number') setCurrentQuestionIdx(parsed.currentQuestionIdx);
+          if (parsed.selectedAnswers) setSelectedAnswers(parsed.selectedAnswers);
+          if (typeof parsed.warningsCount === 'number') setWarningsCount(parsed.warningsCount);
+          if (Array.isArray(parsed.cheatLogs)) setCheatLogs(parsed.cheatLogs);
+        }
+      }
+    } catch (e) {
+      console.warn('Nota al restaurar sesión previa:', e);
+    }
+  }, []);
+
+  // 2. Persist student answers and progress locally in case of internet drops
+  useEffect(() => {
+    if (!matricula.trim()) return;
+    try {
+      if (examStatus === 'submitted' || examStatus === 'forced_submission_cheat') {
+        localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
+      } else {
+        localStorage.setItem(STORAGE_KEY_STUDENT_SESSION, JSON.stringify({
+          matricula,
+          fullName,
+          hasAcceptedRules,
+          isRegistered,
+          isExamStarted,
+          examStatus,
+          currentQuestionIdx,
+          selectedAnswers,
+          warningsCount,
+          cheatLogs,
+          savedAt: Date.now()
+        }));
+      }
+    } catch {
+      // Ignore
+    }
+  }, [matricula, fullName, hasAcceptedRules, isRegistered, isExamStarted, examStatus, currentQuestionIdx, selectedAnswers, warningsCount, cheatLogs]);
+
+  // 3. Synchronize with Firebase Realtime & keep questions updated in real-time
+  useEffect(() => {
+    const unsubExam = firebaseService.subscribeToExam((data) => {
+      if (data && Array.isArray(data.questions) && data.questions.length > 0) {
+        setExamData(data);
+        setCurrentQuestionIdx((prev) => (prev >= data.questions.length ? 0 : prev));
+      }
+    });
+
+    const unsubSession = firebaseService.subscribeToGlobalSession((session) => {
+      setGlobalSession(session);
+    });
+
     const unsubStudents = firebaseService.subscribeToStudents((students) => {
       setAllConnectedStudents(Object.values(students));
     });
@@ -181,8 +250,34 @@ export const StudentView: React.FC<StudentViewProps> = ({
       lastActive: Date.now()
     };
 
-    await firebaseService.syncStudent(studentRecord);
+    try {
+      await firebaseService.syncStudent(studentRecord);
+    } catch (err) {
+      console.warn('Sync diferido por bajón de internet; datos resguardados localmente:', err);
+    }
   }, [calculateScore, currentQuestionIdx]);
+
+  // Online / Offline internet drop listeners
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      setJustReconnected(true);
+      syncToCloud();
+      setTimeout(() => setJustReconnected(false), 4500);
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [syncToCloud]);
 
   // Transition from Waiting Room to Active Exam when Teacher Starts
   useEffect(() => {
@@ -250,6 +345,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   // Handle Cheating / Tab Switching Detection
   const handleViolationDetected = useCallback((reason: string) => {
+    // If device is offline or in an internet drop, ignore blur events that might be triggered by network drops
+    if (typeof navigator !== 'undefined' && !navigator.onLine && reason.includes('blur')) {
+      return;
+    }
     const { isExamStarted, examStatus, warningsCount, cheatLogs } = stateRef.current;
     if (!isExamStarted || examStatus !== 'in_progress') return;
 
@@ -269,6 +368,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
       soundManager.playCriticalAlarm();
       setExamStatus('forced_submission_cheat');
       setExamSubmittedTime(Date.now());
+      try {
+        localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
+      } catch {
+        // Ignore
+      }
       syncToCloud('forced_submission_cheat', newWarningNum, updatedLogs);
     } else {
       soundManager.playWarningAlarm();
@@ -379,6 +483,12 @@ export const StudentView: React.FC<StudentViewProps> = ({
     soundManager.playSuccessChime();
 
     try {
+      localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
+    } catch {
+      // Ignore
+    }
+
+    try {
       confetti({
         particleCount: 90,
         spread: 75,
@@ -393,6 +503,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   // Restart
   const handleRestart = () => {
+    try {
+      localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
+    } catch {
+      // Ignore
+    }
     setIsRegistered(false);
     setIsExamStarted(false);
     setExamStatus('not_started');
@@ -415,6 +530,35 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
+      {/* Network Drop / Offline Resilient Notice */}
+      {!isOnline && (
+        <div className="bg-amber-950/90 border-2 border-amber-500 text-amber-200 p-4 rounded-2xl flex items-center space-x-3 shadow-xl mb-6 animate-in fade-in">
+          <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
+            <WifiOff className="w-5 h-5" />
+          </div>
+          <div className="text-xs">
+            <p className="font-bold text-amber-300 uppercase tracking-wide">
+              📶 Modo Sin Conexión Activado (Bajón de Señal Detectado)
+            </p>
+            <p className="text-slate-300 mt-0.5">
+              Tu examen <strong>NO se cerrará</strong>. Todas tus respuestas están resguardadas en tu dispositivo. Sigue respondiendo tus preguntas con tranquilidad; se sincronizarán en cuanto vuelva la señal.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {justReconnected && (
+        <div className="bg-emerald-950/90 border-2 border-emerald-500 text-emerald-200 p-3.5 rounded-2xl flex items-center space-x-3 shadow-xl mb-6 animate-in fade-in">
+          <div className="p-1.5 rounded-xl bg-emerald-500/20 text-emerald-400 shrink-0">
+            <CheckCircle2 className="w-5 h-5" />
+          </div>
+          <div className="text-xs">
+            <span className="font-bold text-emerald-300">¡Conexión de internet reestablecida!</span>
+            <span className="text-slate-300 ml-1">Tus respuestas se han sincronizado con el profesor.</span>
+          </div>
+        </div>
+      )}
+
       {/* ========================================================
           KAHOOT COUNTDOWN OVERLAY (3... 2... 1... ¡YA!)
           ======================================================== */}
