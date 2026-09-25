@@ -26,8 +26,10 @@ import confetti from 'canvas-confetti';
 import { Question, StudentExamState, CheatLog, StudentStatus, GlobalSessionState } from '../types';
 import { firebaseService, ExamDataPayload } from '../services/firebaseService';
 import { soundManager } from '../services/soundEffects';
+import { randomizeExamForStudent, RandomizedQuestion } from '../services/examRandomizer';
 import { StudentWaitingRoom } from './StudentWaitingRoom';
 import { QuestionCard } from './QuestionCard';
+import { RefreshCw } from 'lucide-react';
 
 interface StudentViewProps {
   onSwitchToTeacher?: () => void;
@@ -44,6 +46,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [examData, setExamData] = useState<ExamDataPayload>(firebaseService.getActiveExam());
   const [globalSession, setGlobalSession] = useState<GlobalSessionState>(firebaseService.getGlobalSession());
   const [allConnectedStudents, setAllConnectedStudents] = useState<StudentExamState[]>([]);
+  const [isRefreshingExam, setIsRefreshingExam] = useState(false);
 
   const activeQuestions: Question[] = examData.questions || [];
   const totalExamPoints = activeQuestions.reduce((acc, q) => acc + q.points, 0) || 100;
@@ -66,6 +69,15 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [examStatus, setExamStatus] = useState<StudentStatus>('not_started');
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<string, any>>({});
+
+  // Individual randomized questions & shuffled options per student (Anti-Copy feature)
+  const [studentQuestions, setStudentQuestions] = useState<RandomizedQuestion[]>(() => 
+    randomizeExamForStudent(
+      examData.questions || [], 
+      matricula || 'ANONYMOUS', 
+      examData.updatedAt || examData.title
+    )
+  );
   
   // Timers & Synchronized Countdown
   const [timeRemaining, setTimeRemaining] = useState<number>(20 * 60);
@@ -78,12 +90,40 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [isSubmitConfirmOpen, setIsSubmitConfirmOpen] = useState(false);
   const [examSubmittedTime, setExamSubmittedTime] = useState<number | undefined>(undefined);
 
+  // 0. On mount, explicitly pull fresh active exam from Firestore to ensure teacher's latest exam is loaded
+  useEffect(() => {
+    firebaseService.fetchActiveExam(true).then((fresh) => {
+      if (fresh && Array.isArray(fresh.questions) && fresh.questions.length > 0) {
+        setExamData(fresh);
+      }
+    });
+  }, []);
+
+  // Update randomized questions whenever examData or student matricula changes
+  useEffect(() => {
+    const randomized = randomizeExamForStudent(
+      examData.questions || [],
+      matricula || 'STUDENT_PREVIEW',
+      examData.updatedAt || examData.title
+    );
+    setStudentQuestions(randomized);
+  }, [examData, matricula]);
+
   // 1. Restore previous active session from localStorage so reload/network drops do not close exam
   useEffect(() => {
     try {
       const savedSession = localStorage.getItem(STORAGE_KEY_STUDENT_SESSION);
       if (savedSession) {
         const parsed = JSON.parse(savedSession);
+        const currentExam = firebaseService.getActiveExam();
+        
+        // If the saved session is from a different exam or older version, discard stale attempt
+        const isSameExam = !parsed.examTitle || parsed.examTitle === currentExam.title;
+        if (!isSameExam) {
+          localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
+          return;
+        }
+
         if (parsed && parsed.matricula && parsed.examStatus !== 'submitted' && parsed.examStatus !== 'forced_submission_cheat') {
           setMatricula(parsed.matricula);
           setFullName(parsed.fullName || '');
@@ -120,13 +160,15 @@ export const StudentView: React.FC<StudentViewProps> = ({
           selectedAnswers,
           warningsCount,
           cheatLogs,
+          examTitle: examData.title,
+          examUpdatedAt: examData.updatedAt,
           savedAt: Date.now()
         }));
       }
     } catch {
       // Ignore
     }
-  }, [matricula, fullName, hasAcceptedRules, isRegistered, isExamStarted, examStatus, currentQuestionIdx, selectedAnswers, warningsCount, cheatLogs]);
+  }, [matricula, fullName, hasAcceptedRules, isRegistered, isExamStarted, examStatus, currentQuestionIdx, selectedAnswers, warningsCount, cheatLogs, examData.title, examData.updatedAt]);
 
   // 3. Synchronize with Firebase Realtime & keep questions updated in real-time
   useEffect(() => {
@@ -134,6 +176,23 @@ export const StudentView: React.FC<StudentViewProps> = ({
       if (data && Array.isArray(data.questions) && data.questions.length > 0) {
         setExamData(data);
         setCurrentQuestionIdx((prev) => (prev >= data.questions.length ? 0 : prev));
+
+        // If teacher changed the exam, reset student attempt if it was for a previous exam
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY_STUDENT_SESSION);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed.examTitle && parsed.examTitle !== data.title) {
+              localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
+              setIsExamStarted(false);
+              setExamStatus('not_started');
+              setSelectedAnswers({});
+              setCurrentQuestionIdx(0);
+            }
+          }
+        } catch {
+          // Ignore
+        }
       }
     });
 
@@ -151,6 +210,20 @@ export const StudentView: React.FC<StudentViewProps> = ({
       unsubStudents();
     };
   }, []);
+
+  // Manual exam sync button handler
+  const handleManualSyncExam = async () => {
+    setIsRefreshingExam(true);
+    soundManager.playClick();
+    try {
+      const fresh = await firebaseService.fetchActiveExam(true);
+      if (fresh) {
+        setExamData(fresh);
+      }
+    } finally {
+      setTimeout(() => setIsRefreshingExam(false), 500);
+    }
+  };
 
   // Ref to track latest state for event handlers without stale closures
   const stateRef = useRef({
@@ -524,7 +597,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const currentQ = activeQuestions[currentQuestionIdx] || activeQuestions[0];
+  const currentQ = studentQuestions[currentQuestionIdx] || studentQuestions[0] || activeQuestions[0];
   const { earnedPoints, percentage } = calculateScore(selectedAnswers);
   const answeredCount = Object.keys(selectedAnswers).length;
 
@@ -593,6 +666,26 @@ export const StudentView: React.FC<StudentViewProps> = ({
             <p className="text-slate-400 mt-2 text-xs sm:text-sm">
               Ingresa tus datos oficiales para unirte a la <strong>Sala de Espera</strong> del examen.
             </p>
+
+            {/* Anti-Copy and Live Info Badges */}
+            <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-[11px] font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                🛡️ Modo Anti-Copia: Reactivos y opciones permutados por alumno
+              </span>
+              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-mono text-emerald-300 bg-emerald-500/15 border border-emerald-500/30">
+                {activeQuestions.length} reactivos ({totalExamPoints} pts)
+              </span>
+              <button
+                type="button"
+                onClick={handleManualSyncExam}
+                disabled={isRefreshingExam}
+                className="inline-flex items-center px-3 py-1 rounded-full text-[11px] font-semibold text-slate-300 hover:text-white bg-slate-900/80 hover:bg-slate-800 border border-slate-700 transition-colors"
+                title="Sincronizar reactivos con el profesor"
+              >
+                <RefreshCw className={`w-3 h-3 mr-1.5 ${isRefreshingExam ? 'animate-spin text-indigo-400' : 'text-slate-400'}`} />
+                <span>{isRefreshingExam ? 'Sincronizando...' : 'Actualizar Examen'}</span>
+              </button>
+            </div>
           </div>
 
           <form onSubmit={handleJoinWaitingRoom} className="max-w-xl mx-auto space-y-6">
@@ -767,20 +860,25 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
           {/* Progress Indicator */}
           <div className="bg-slate-800/60 rounded-2xl border border-slate-700/60 p-3 sm:p-4">
-            <div className="flex items-center justify-between text-xs text-slate-400 mb-2 font-medium">
-              <span>Pregunta {currentQuestionIdx + 1} de {activeQuestions.length}</span>
-              <span>{answeredCount} respondidas ({Math.round((answeredCount / activeQuestions.length) * 100)}%)</span>
+            <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-slate-400 mb-2 font-medium">
+              <div className="flex items-center space-x-2">
+                <span className="font-bold text-slate-200">Pregunta {currentQuestionIdx + 1} de {studentQuestions.length}</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 font-semibold hidden sm:inline">
+                  🛡️ Orden Aleatorio Anti-Copia
+                </span>
+              </div>
+              <span>{answeredCount} respondidas ({Math.round((answeredCount / (studentQuestions.length || 1)) * 100)}%)</span>
             </div>
             <div className="w-full bg-slate-700/50 h-2 rounded-full overflow-hidden">
               <div
                 className="bg-gradient-to-r from-indigo-500 to-pink-500 h-full rounded-full transition-all duration-300"
-                style={{ width: `${(answeredCount / activeQuestions.length) * 100}%` }}
+                style={{ width: `${(answeredCount / (studentQuestions.length || 1)) * 100}%` }}
               />
             </div>
 
             {/* Quick Question Bubble Selector */}
             <div className="flex items-center space-x-2 mt-3 overflow-x-auto pb-1">
-              {activeQuestions.map((q, idx) => {
+              {studentQuestions.map((q, idx) => {
                 const isAnswered = selectedAnswers[q.id] !== undefined;
                 const isCurrent = idx === currentQuestionIdx;
                 return (
@@ -823,10 +921,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
               <span>Anterior</span>
             </button>
 
-            {currentQuestionIdx < activeQuestions.length - 1 ? (
+            {currentQuestionIdx < studentQuestions.length - 1 ? (
               <button
                 type="button"
-                onClick={() => setCurrentQuestionIdx((prev) => Math.min(activeQuestions.length - 1, prev + 1))}
+                onClick={() => setCurrentQuestionIdx((prev) => Math.min(studentQuestions.length - 1, prev + 1))}
                 className="flex items-center space-x-1.5 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 shadow-md shadow-indigo-600/20 transition-all"
               >
                 <span>Siguiente</span>

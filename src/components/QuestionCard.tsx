@@ -96,14 +96,18 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
       {question.type === 'opcion_multiple' && question.options && (
         <div className="space-y-3 mb-6">
           {question.options.map((opt, optIdx) => {
-            const isSelected = currentAnswer === optIdx;
+            // When options are randomized, map displayed position to original master index
+            const originalIndex = (question as any).shuffledOptions
+              ? (question as any).shuffledOptions[optIdx]?.originalIndex
+              : optIdx;
+            const isSelected = currentAnswer === originalIndex;
             const letter = String.fromCharCode(65 + optIdx);
             return (
               <button
                 key={optIdx}
                 type="button"
                 disabled={disabled}
-                onClick={() => onAnswerChange(question.id, optIdx)}
+                onClick={() => onAnswerChange(question.id, originalIndex)}
                 className={`w-full text-left p-4 rounded-2xl border transition-all flex items-center space-x-3.5 ${
                   isSelected
                     ? 'bg-gradient-to-r from-indigo-600/30 to-purple-600/30 border-indigo-500 text-white shadow-md shadow-indigo-600/10 ring-1 ring-indigo-500'

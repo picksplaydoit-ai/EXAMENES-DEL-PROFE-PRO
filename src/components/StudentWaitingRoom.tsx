@@ -82,6 +82,12 @@ export const StudentWaitingRoom: React.FC<StudentWaitingRoomProps> = ({
           Matrícula: {student.matricula}
         </p>
 
+        <div className="mt-3 inline-flex items-center space-x-2 px-3.5 py-1 rounded-full bg-indigo-500/20 border border-indigo-500/30 text-xs text-indigo-200">
+          <span>Examen: <strong className="text-white">{student.examTitle || session.title || 'Evaluación'}</strong></span>
+          <span>•</span>
+          <span className="text-amber-300 font-semibold">🛡️ Orden anti-copia activo</span>
+        </div>
+
         {/* Waiting Message */}
         <div className="mt-6 max-w-lg mx-auto bg-slate-950/70 border border-slate-800 rounded-2xl p-4 sm:p-5">
           <div className="flex items-center justify-center space-x-2 text-indigo-300 font-bold text-sm sm:text-base animate-pulse">

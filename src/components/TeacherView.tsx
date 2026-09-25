@@ -33,7 +33,10 @@ import {
   StopCircle,
   Award,
   FolderOpen,
-  BookOpen
+  BookOpen,
+  LayoutGrid,
+  XCircle,
+  Minus
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { StudentExamState, Question, GlobalSessionState, SavedExam } from '../types';
@@ -52,6 +55,18 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 }) => {
   const [students, setStudents] = useState<Record<string, StudentExamState>>({});
   const [selectedStudentForModal, setSelectedStudentForModal] = useState<StudentExamState | null>(null);
+  const [viewMode, setViewMode] = useState<'matrix' | 'table'>('matrix');
+  const [inspectedQuestionDetail, setInspectedQuestionDetail] = useState<{
+    studentName: string;
+    matricula: string;
+    questionNumber: number;
+    question: Question;
+    evaluation: {
+      status: 'correct' | 'incorrect' | 'unanswered';
+      studentAnswerText: string;
+      correctAnswerText: string;
+    };
+  } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'waiting' | 'in_progress' | 'cheated' | 'completed'>('all');
   const [lastIncidentStudent, setLastIncidentStudent] = useState<{ name: string; time: number; warnings: number } | null>(null);
@@ -169,6 +184,68 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
     return true;
   });
+
+  // Helper to evaluate each question for a student (Palomita ✓ / Tache ✗ / Pendiente)
+  const evaluateStudentQuestion = (q: Question, studentAns: any): {
+    status: 'correct' | 'incorrect' | 'unanswered';
+    studentAnswerText: string;
+    correctAnswerText: string;
+  } => {
+    if (studentAns === undefined || studentAns === null || studentAns === '') {
+      return {
+        status: 'unanswered',
+        studentAnswerText: 'Sin responder aún',
+        correctAnswerText: q.type === 'opcion_multiple' && q.options && q.correctAnswer !== undefined
+          ? `${String.fromCharCode(65 + q.correctAnswer)}) ${q.options[q.correctAnswer]}`
+          : 'Clave oficial'
+      };
+    }
+
+    if (q.type === 'opcion_multiple' && q.options) {
+      const isCorrect = studentAns === q.correctAnswer;
+      const ansText = typeof studentAns === 'number' && q.options[studentAns]
+        ? `${String.fromCharCode(65 + studentAns)}) ${q.options[studentAns]}`
+        : String(studentAns);
+      const correctText = q.correctAnswer !== undefined && q.options[q.correctAnswer]
+        ? `${String.fromCharCode(65 + q.correctAnswer)}) ${q.options[q.correctAnswer]}`
+        : '-';
+
+      return {
+        status: isCorrect ? 'correct' : 'incorrect',
+        studentAnswerText: ansText,
+        correctAnswerText: correctText
+      };
+    }
+
+    if (q.type === 'relacionar' && q.pairs) {
+      const matches: Record<string, string> = studentAns || {};
+      let correctPairs = 0;
+      q.pairs.forEach((p) => {
+        if (matches[p.id] === p.right) correctPairs++;
+      });
+      const isCorrect = correctPairs === q.pairs.length;
+      return {
+        status: isCorrect ? 'correct' : 'incorrect',
+        studentAnswerText: `${correctPairs}/${q.pairs.length} parejas`,
+        correctAnswerText: 'Todas las parejas correctas'
+      };
+    }
+
+    if (q.type === 'abierta') {
+      const hasSubstance = typeof studentAns === 'string' && studentAns.trim().length >= 10;
+      return {
+        status: hasSubstance ? 'correct' : 'incorrect',
+        studentAnswerText: typeof studentAns === 'string' ? studentAns : 'Respuesta abierta',
+        correctAnswerText: q.referenceAnswer || 'Respuesta de desarrollo'
+      };
+    }
+
+    return {
+      status: 'unanswered',
+      studentAnswerText: 'Sin responder',
+      correctAnswerText: '-'
+    };
+  };
 
   const showNotification = (msg: string) => {
     setToastMessage(msg);
@@ -669,6 +746,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
                   Examen Activo en Tiempo Real
                 </span>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  🛡️ Anti-Copia: Orden y Opciones Barajados
+                </span>
                 <span className="text-xs text-slate-400 font-mono">
                   • {activeQuestions.length} reactivos ({totalExamPoints} pts) • Opción Múltiple
                 </span>
@@ -873,66 +953,99 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         </div>
 
         {/* Filter Tabs */}
-        <div className="flex items-center space-x-1 bg-slate-900 p-1 rounded-xl border border-slate-800 w-full sm:w-auto overflow-x-auto">
-          <button
-            type="button"
-            onClick={() => setStatusFilter('all')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-              statusFilter === 'all'
-                ? 'bg-indigo-600 text-white'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Todos ({totalStudents})
-          </button>
-          <button
-            type="button"
-            onClick={() => setStatusFilter('waiting')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-              statusFilter === 'waiting'
-                ? 'bg-amber-600 text-white'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            En Sala ({waitingStudents.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setStatusFilter('in_progress')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-              statusFilter === 'in_progress'
-                ? 'bg-emerald-600 text-white'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            En Examen ({inProgressCount})
-          </button>
-          <button
-            type="button"
-            onClick={() => setStatusFilter('cheated')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-              statusFilter === 'cheated'
-                ? 'bg-rose-600 text-white'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Con Faltas ({studentList.filter((s) => s.cheatWarningsCount > 0).length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setStatusFilter('completed')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-              statusFilter === 'completed'
-                ? 'bg-purple-600 text-white'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Finalizados ({completedCount + cheatedCount})
-          </button>
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <div className="flex items-center space-x-1 bg-slate-900 p-1 rounded-xl border border-slate-800 overflow-x-auto">
+            <button
+              type="button"
+              onClick={() => setStatusFilter('all')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                statusFilter === 'all'
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Todos ({totalStudents})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('waiting')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                statusFilter === 'waiting'
+                  ? 'bg-amber-600 text-white'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              En Sala ({waitingStudents.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('in_progress')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                statusFilter === 'in_progress'
+                  ? 'bg-emerald-600 text-white'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              En Examen ({inProgressCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('cheated')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                statusFilter === 'cheated'
+                  ? 'bg-rose-600 text-white'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Con Faltas ({studentList.filter((s) => s.cheatWarningsCount > 0).length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('completed')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                statusFilter === 'completed'
+                  ? 'bg-purple-600 text-white'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Finalizados ({completedCount + cheatedCount})
+            </button>
+          </div>
+
+          {/* View Mode Switcher: Matriz Reactivo x Reactivo vs Tabla */}
+          <div className="flex items-center space-x-1 bg-slate-900 p-1 rounded-xl border border-slate-700/80">
+            <button
+              type="button"
+              onClick={() => setViewMode('matrix')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
+                viewMode === 'matrix'
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md shadow-emerald-600/25 ring-1 ring-emerald-400/40'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+              title="Ver en vivo qué tal va cada alumno pregunta por pregunta con palomitas (✓) y taches (✗)"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" />
+              <span>Desglose en Vivo (✓ / ✗)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
+                viewMode === 'table'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/25'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+              title="Vista de tabla resumen"
+            >
+              <Layers className="w-3.5 h-3.5 text-indigo-300" />
+              <span>Tabla</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Real-time Students Table / Cards */}
+      {/* Real-time Students Monitor (Matrix View or Table View) */}
       <div className="bg-slate-800/80 rounded-2xl border border-slate-700/80 shadow-xl overflow-hidden">
         {filteredStudents.length === 0 ? (
           <div className="py-16 px-4 text-center">
@@ -941,7 +1054,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </div>
             <h3 className="text-base font-bold text-white">No hay alumnos conectados</h3>
             <p className="text-xs text-slate-400 max-w-md mx-auto mt-1">
-              Muestra el <strong>Código QR</strong> a tus alumnos o comparte el enlace. Cuando ingresen su matrícula aparecerán aquí al instante con su avance y faltas sincronizadas.
+              Muestra el <strong>Código QR</strong> a tus alumnos o comparte el enlace. Cuando ingresen su matrícula aparecerán aquí al instante con sus respuestas en tiempo real (palomitas ✓ y taches ✗) y registro de faltas.
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               <button
@@ -963,7 +1076,271 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               </button>
             </div>
           </div>
+        ) : viewMode === 'matrix' ? (
+          /* ========================================================
+             VIEW MODE 1: MATRIZ EN VIVO REACTIVO POR REACTIVO (✓ / ✗)
+             ======================================================== */
+          <div className="p-4 sm:p-6 space-y-4">
+            {/* Live Legend */}
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-900/90 border border-slate-700/80 text-xs">
+              <div className="flex items-center space-x-2 text-slate-300">
+                <span className="font-bold text-white flex items-center">
+                  <Eye className="w-3.5 h-3.5 mr-1.5 text-emerald-400" />
+                  Monitor Docente Reactivo por Reactivo (En Tiempo Real):
+                </span>
+                <span className="text-[11px] text-slate-400 hidden md:inline">
+                  • Solo tú puedes ver este desglose evaluativo
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-[11px] font-semibold">
+                <span className="flex items-center space-x-1.5 text-emerald-300">
+                  <span className="w-4 h-4 rounded bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center font-black text-emerald-400">✓</span>
+                  <span>Palomita (Respuesta Correcta)</span>
+                </span>
+                <span className="flex items-center space-x-1.5 text-rose-300">
+                  <span className="w-4 h-4 rounded bg-rose-500/20 border border-rose-500/50 flex items-center justify-center font-black text-rose-400">✗</span>
+                  <span>Tache (Respuesta Incorrecta)</span>
+                </span>
+                <span className="flex items-center space-x-1.5 text-slate-400">
+                  <span className="w-4 h-4 rounded bg-slate-800 border border-slate-700 flex items-center justify-center font-black text-slate-500">-</span>
+                  <span>Sin responder</span>
+                </span>
+                <span className="flex items-center space-x-1 text-amber-300 border-l border-slate-700 pl-3">
+                  <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Faltas Anti-Trampas</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Matrix Student Cards */}
+            <div className="space-y-4">
+              {filteredStudents.map((st) => {
+                const answeredCount = Object.keys(st.answers || {}).length;
+                const totalQCount = activeQuestions.length || 1;
+                const progressPct = Math.round((answeredCount / totalQCount) * 100);
+
+                let correctCount = 0;
+                let incorrectCount = 0;
+                let unansweredCount = 0;
+
+                const evaluatedQuestions = activeQuestions.map((q, idx) => {
+                  const studentAns = st.answers ? st.answers[q.id] : undefined;
+                  const evaluation = evaluateStudentQuestion(q, studentAns);
+                  if (evaluation.status === 'correct') correctCount++;
+                  else if (evaluation.status === 'incorrect') incorrectCount++;
+                  else unansweredCount++;
+                  return {
+                    q,
+                    qNumber: idx + 1,
+                    evaluation
+                  };
+                });
+
+                const hasFaltas = st.cheatWarningsCount > 0;
+
+                return (
+                  <div
+                    key={st.id}
+                    className={`rounded-2xl border p-4 sm:p-5 transition-all shadow-lg ${
+                      st.cheatWarningsCount >= 3
+                        ? 'bg-rose-950/25 border-rose-500/60 ring-1 ring-rose-500/40'
+                        : hasFaltas
+                        ? 'bg-slate-850/90 border-amber-500/50'
+                        : 'bg-slate-900/90 border-slate-700/80 hover:border-slate-600'
+                    }`}
+                  >
+                    {/* Top Row: Identity, Status, Faltas, Score & Action Buttons */}
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+                      {/* Left: Avatar, Name, Matricula & Status */}
+                      <div className="flex items-center space-x-3.5">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shrink-0 shadow-sm ${
+                          st.status === 'forced_submission_cheat'
+                            ? 'bg-rose-600 text-white'
+                            : st.status === 'waiting'
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                            : st.status === 'submitted'
+                            ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/40'
+                            : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        }`}>
+                          {st.fullName.charAt(0).toUpperCase()}
+                        </div>
+
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <h3 className="font-extrabold text-white text-sm sm:text-base">
+                              {st.fullName}
+                            </h3>
+                            <span className="font-mono text-xs text-indigo-300 bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20">
+                              {st.matricula}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center space-x-2 mt-1">
+                            {st.status === 'waiting' ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse mr-1" />
+                                Sala de Espera
+                              </span>
+                            ) : st.status === 'in_progress' ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping mr-1" />
+                                En Examen (En Vivo)
+                              </span>
+                            ) : st.status === 'forced_submission_cheat' ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-black bg-rose-600 text-white">
+                                <AlertOctagon className="w-3 h-3 mr-1" />
+                                Expulsado (3 faltas)
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                                <CheckCircle2 className="w-3 h-3 mr-1 text-indigo-400" />
+                                Completado
+                              </span>
+                            )}
+
+                            <span className="text-[11px] text-slate-400 font-mono">
+                              • {answeredCount} de {totalQCount} respondidas ({progressPct}%)
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right: Faltas, Calificación, Counters & Actions */}
+                      <div className="flex flex-wrap items-center gap-3">
+                        {/* FALTAS ANTI-TRAMPAS (Muy visible para el docente) */}
+                        <div className="flex items-center space-x-1.5">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Faltas:</span>
+                          {st.cheatWarningsCount === 0 ? (
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-xl text-xs font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                              <Check className="w-3.5 h-3.5 mr-1 text-emerald-400" />
+                              0 Faltas (Limpio)
+                            </span>
+                          ) : st.cheatWarningsCount === 1 ? (
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-xl text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
+                              <AlertTriangle className="w-3.5 h-3.5 mr-1 text-amber-400" />
+                              1 / 3 Falta
+                            </span>
+                          ) : st.cheatWarningsCount === 2 ? (
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-xl text-xs font-bold bg-orange-500/25 text-orange-300 border border-orange-500/50 animate-pulse">
+                              <AlertTriangle className="w-3.5 h-3.5 mr-1 text-orange-400" />
+                              2 / 3 Faltas (En Riesgo)
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-xl text-xs font-black bg-rose-600 text-white shadow-md shadow-rose-600/40 animate-bounce">
+                              <AlertOctagon className="w-3.5 h-3.5 mr-1 text-white" />
+                              3 FALTAS (BLOQUEADO)
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Live Score */}
+                        <div className="bg-slate-950/80 px-3 py-1.5 rounded-xl border border-slate-800 text-right">
+                          <span className="text-[10px] text-slate-400 block font-semibold uppercase">Calificación en Vivo</span>
+                          <span className="text-sm font-black text-white font-mono">{st.score} <span className="text-xs font-normal text-slate-400">/ {totalExamPoints} pts</span> ({st.percentage}%)</span>
+                        </div>
+
+                        {/* Live Counter Badges: Palomitas ✓, Taches ✗, Pendientes ⏳ */}
+                        <div className="flex items-center space-x-1.5 bg-slate-950/90 p-1 rounded-xl border border-slate-800 text-xs font-mono font-bold">
+                          <span className="px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center space-x-1" title={`${correctCount} respuestas correctas con palomita`}>
+                            <span className="text-emerald-400">✓</span>
+                            <span>{correctCount}</span>
+                          </span>
+                          <span className="px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center space-x-1" title={`${incorrectCount} respuestas incorrectas con tache`}>
+                            <span className="text-rose-400">✗</span>
+                            <span>{incorrectCount}</span>
+                          </span>
+                          <span className="px-2 py-0.5 rounded-lg bg-slate-800 text-slate-400 border border-slate-700 flex items-center space-x-1" title={`${unansweredCount} reactivos sin responder`}>
+                            <span className="text-slate-500">-</span>
+                            <span>{unansweredCount}</span>
+                          </span>
+                        </div>
+
+                        {/* Action buttons */}
+                        <div className="flex items-center space-x-1.5 pl-2 border-l border-slate-800">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedStudentForModal(st)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors"
+                            title="Auditoría completa del alumno"
+                          >
+                            <Eye className="w-4 h-4 text-indigo-400" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleResetStudent(st.id)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors"
+                            title="Reiniciar intento"
+                          >
+                            <RotateCcw className="w-4 h-4 text-amber-400" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteStudent(st.id)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/50 text-slate-400 hover:text-rose-300 border border-slate-700 transition-colors"
+                            title="Eliminar registro"
+                          >
+                            <Trash2 className="w-4 h-4 text-rose-400" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Bottom Row: Palomitas (✓) and Taches (✗) for each question */}
+                    <div className="pt-3.5">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center">
+                          <span>Desglose Reactivo por Reactivo ({evaluatedQuestions.length} Preguntas):</span>
+                        </span>
+                        <span className="text-[10px] text-slate-500 italic hidden sm:inline">
+                          Haz clic en cualquier palomita (✓) o tache (✗) para ver el reactivo y la opción elegida
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {evaluatedQuestions.map((item) => {
+                          const { q, qNumber, evaluation } = item;
+                          const isCorrect = evaluation.status === 'correct';
+                          const isIncorrect = evaluation.status === 'incorrect';
+                          const isUnanswered = evaluation.status === 'unanswered';
+
+                          return (
+                            <button
+                              key={q.id}
+                              type="button"
+                              onClick={() => setInspectedQuestionDetail({
+                                studentName: st.fullName,
+                                matricula: st.matricula,
+                                questionNumber: qNumber,
+                                question: q,
+                                evaluation
+                              })}
+                              title={`P${qNumber}: ${q.question}\n• Respuesta del alumno: ${evaluation.studentAnswerText} (${isCorrect ? '✓ CORRECTA' : isIncorrect ? '✗ INCORRECTA' : 'Pendiente'})\n• Clave oficial: ${evaluation.correctAnswerText}\n(Haz clic para ver detalle)`}
+                              className={`px-2 py-1 rounded-lg text-xs font-mono font-bold border transition-all flex items-center space-x-1 cursor-pointer transform active:scale-95 ${
+                                isCorrect
+                                  ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/50 shadow-sm shadow-emerald-500/10'
+                                  : isIncorrect
+                                  ? 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border-rose-500/50 shadow-sm shadow-rose-500/10'
+                                  : 'bg-slate-950/60 hover:bg-slate-900 text-slate-500 border-slate-800'
+                              }`}
+                            >
+                              {isCorrect && <Check className="w-3.5 h-3.5 text-emerald-400 stroke-[3]" />}
+                              {isIncorrect && <X className="w-3.5 h-3.5 text-rose-400 stroke-[3]" />}
+                              {isUnanswered && <Minus className="w-3 h-3 text-slate-600" />}
+                              <span>P{qNumber}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         ) : (
+          /* ========================================================
+             VIEW MODE 2: TABLA RESUMEN CON DESGLOSE EN VIVO (✓ / ✗)
+             ======================================================== */
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
@@ -973,6 +1350,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   <th className="py-3.5 px-4">Progreso</th>
                   <th className="py-3.5 px-4">Calificación</th>
                   <th className="py-3.5 px-4">Faltas Anti-Trampas</th>
+                  <th className="py-3.5 px-4 min-w-[240px]">Desglose en Vivo (✓ / ✗)</th>
                   <th className="py-3.5 px-4 text-right">Acciones</th>
                 </tr>
               </thead>
@@ -1088,6 +1466,51 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                               <AlertOctagon className="w-3 h-3 mr-1 text-white animate-bounce" />
                               3 / 3 FALTAS (BLOQUEADO)
                             </span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Live Question-by-Question Palomitas and Taches column */}
+                      <td className="py-4 px-4">
+                        <div className="flex flex-wrap items-center gap-1 max-w-xs">
+                          {activeQuestions.slice(0, 15).map((q, idx) => {
+                            const studentAns = st.answers ? st.answers[q.id] : undefined;
+                            const evaluation = evaluateStudentQuestion(q, studentAns);
+                            const isCorrect = evaluation.status === 'correct';
+                            const isIncorrect = evaluation.status === 'incorrect';
+
+                            return (
+                              <button
+                                key={q.id}
+                                type="button"
+                                onClick={() => setInspectedQuestionDetail({
+                                  studentName: st.fullName,
+                                  matricula: st.matricula,
+                                  questionNumber: idx + 1,
+                                  question: q,
+                                  evaluation
+                                })}
+                                title={`P${idx + 1}: ${q.question}\n• Respuesta: ${evaluation.studentAnswerText} (${isCorrect ? '✓ CORRECTA' : isIncorrect ? '✗ INCORRECTA' : 'Pendiente'})\n• Clave: ${evaluation.correctAnswerText}`}
+                                className={`w-6 h-6 rounded text-[10px] font-mono font-bold flex items-center justify-center border transition-all ${
+                                  isCorrect
+                                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                                    : isIncorrect
+                                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/50'
+                                    : 'bg-slate-900/60 text-slate-500 border-slate-800'
+                                }`}
+                              >
+                                {isCorrect ? '✓' : isIncorrect ? '✗' : '-'}
+                              </button>
+                            );
+                          })}
+                          {activeQuestions.length > 15 && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedStudentForModal(st)}
+                              className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold ml-1"
+                            >
+                              +{activeQuestions.length - 15} más
+                            </button>
                           )}
                         </div>
                       </td>

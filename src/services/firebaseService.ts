@@ -121,6 +121,21 @@ class FirebaseDualService {
     this.loadSessionFromStorage();
     this.loadLocalCache();
     this.initDefaultConfig();
+    this.initNetworkRecovery();
+  }
+
+  private initNetworkRecovery() {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', () => {
+        this.flushOfflineQueue();
+        this.fetchActiveExam(true);
+      });
+      setInterval(() => {
+        if (typeof navigator !== 'undefined' && navigator.onLine) {
+          this.flushOfflineQueue();
+        }
+      }, 5000);
+    }
   }
 
   private initBroadcastChannel() {
@@ -493,6 +508,39 @@ class FirebaseDualService {
     return this.activeExamData;
   }
 
+  public async fetchActiveExam(forceServer: boolean = false): Promise<ExamDataPayload> {
+    if (this.firestore) {
+      try {
+        const examDocRef = doc(this.firestore, 'exams', 'quimica_general_2026');
+        let snap;
+        if (forceServer) {
+          try {
+            snap = await getDocFromServer(examDocRef);
+          } catch {
+            snap = await getDoc(examDocRef);
+          }
+        } else {
+          snap = await getDoc(examDocRef);
+        }
+
+        if (snap && snap.exists()) {
+          const val = snap.data() as ExamDataPayload;
+          if (val && Array.isArray(val.questions) && val.questions.length > 0) {
+            this.activeExamData = val;
+            try {
+              localStorage.setItem(STORAGE_KEY_EXAM_DATA, JSON.stringify(val));
+            } catch {}
+            this.notifyExamListeners();
+            return val;
+          }
+        }
+      } catch (err) {
+        console.warn('Nota al consultar examen activo en Firestore:', err);
+      }
+    }
+    return this.activeExamData;
+  }
+
   public async saveActiveExam(title: string, questions: Question[]): Promise<void> {
     const payload: ExamDataPayload = {
       title: title.trim() || 'Examen de Química',
@@ -699,6 +747,43 @@ class FirebaseDualService {
 
   // --- STUDENT RESULTS MANAGEMENT ---
 
+  private queueOfflineStudent(student: StudentExamState) {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = localStorage.getItem('quimica_offline_sync_queue');
+      const q = raw ? JSON.parse(raw) : {};
+      q[student.id] = student;
+      localStorage.setItem('quimica_offline_sync_queue', JSON.stringify(q));
+    } catch {
+      // Ignore
+    }
+  }
+
+  public async flushOfflineQueue(): Promise<void> {
+    if (typeof window === 'undefined' || !this.firestore) return;
+    try {
+      const raw = localStorage.getItem('quimica_offline_sync_queue');
+      if (!raw) return;
+      const q = JSON.parse(raw) as Record<string, StudentExamState>;
+      const ids = Object.keys(q);
+      if (ids.length === 0) return;
+
+      for (const id of ids) {
+        const st = q[id];
+        try {
+          const studentDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'students', id);
+          await setDoc(studentDocRef, st, { merge: true });
+          delete q[id];
+        } catch {
+          // Keep in queue for next flush attempt
+        }
+      }
+      localStorage.setItem('quimica_offline_sync_queue', JSON.stringify(q));
+    } catch {
+      // Ignore
+    }
+  }
+
   public async syncStudent(student: StudentExamState): Promise<void> {
     this.localStudentsCache[student.id] = student;
     this.saveLocalCache();
@@ -716,16 +801,23 @@ class FirebaseDualService {
 
     this.notifyListeners();
 
+    // Check if offline: queue immediately
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      this.queueOfflineStudent(student);
+      return;
+    }
+
     // Sync to Firestore
     if (this.firestore) {
       try {
         const studentDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'students', student.id);
         await setDoc(studentDocRef, student, { merge: true });
       } catch (err) {
+        this.queueOfflineStudent(student);
         if ((err as { code?: string })?.code === 'permission-denied') {
           handleFirestoreError(err, OperationType.WRITE, `exams/quimica_general_2026/students/${student.id}`);
         } else {
-          console.warn('Error guardando estudiante en Firestore:', err);
+          console.warn('Sync diferido por fallo de red; encolado para reintento automático:', err);
         }
       }
     }
