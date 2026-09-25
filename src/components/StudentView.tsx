@@ -11,25 +11,32 @@ import {
   ChevronRight, 
   ChevronLeft, 
   Send, 
-  EyeOff, 
-  Info,
-  Flame,
-  Atom,
-  HelpCircle,
-  AlertOctagon
+  Atom, 
+  HelpCircle, 
+  AlertOctagon,
+  Sparkles,
+  ArrowRightLeft,
+  AlignLeft,
+  Volume2,
+  AlertCircle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { Question, StudentExamState, CheatLog, StudentStatus } from '../types';
+import { Question, StudentExamState, CheatLog, StudentStatus, GlobalSessionState } from '../types';
 import { firebaseService, ExamDataPayload } from '../services/firebaseService';
 import { soundManager } from '../services/soundEffects';
+import { StudentWaitingRoom } from './StudentWaitingRoom';
+import { QuestionCard } from './QuestionCard';
 
 interface StudentViewProps {
   onSwitchToTeacher?: () => void;
 }
 
 export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) => {
-  // Dynamic Exam Content
+  // Global Session & Exam Data
   const [examData, setExamData] = useState<ExamDataPayload>(firebaseService.getActiveExam());
+  const [globalSession, setGlobalSession] = useState<GlobalSessionState>(firebaseService.getGlobalSession());
+  const [allConnectedStudents, setAllConnectedStudents] = useState<StudentExamState[]>([]);
+
   const activeQuestions: Question[] = examData.questions || [];
   const totalExamPoints = activeQuestions.reduce((acc, q) => acc + q.points, 0) || 100;
 
@@ -37,28 +44,39 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
   const [fullName, setFullName] = useState('');
   const [matricula, setMatricula] = useState('');
   const [hasAcceptedRules, setHasAcceptedRules] = useState(false);
-  const [isExamStarted, setIsExamStarted] = useState(false);
+  const [registrationError, setRegistrationError] = useState<string | null>(null);
 
-  // Active Exam State
-  const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
-  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, number>>({});
+  // Active Flow State
+  const [isRegistered, setIsRegistered] = useState(false);
+  const [isExamStarted, setIsExamStarted] = useState(false);
   const [examStatus, setExamStatus] = useState<StudentStatus>('not_started');
-  const [examStartTime, setExamStartTime] = useState<number>(0);
-  const [examSubmittedTime, setExamSubmittedTime] = useState<number | undefined>(undefined);
-  const [timeRemaining, setTimeRemaining] = useState<number>(15 * 60); // 15 minutes in seconds
+  const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, any>>({});
+  
+  // Timers & Synchronized Countdown
+  const [timeRemaining, setTimeRemaining] = useState<number>(20 * 60);
+  const [countdownStartNumber, setCountdownStartNumber] = useState<number | null>(null);
 
   // Anti-Cheat State
   const [warningsCount, setWarningsCount] = useState<number>(0);
   const [cheatLogs, setCheatLogs] = useState<CheatLog[]>([]);
   const [activeWarningModal, setActiveWarningModal] = useState<number | null>(null);
   const [isSubmitConfirmOpen, setIsSubmitConfirmOpen] = useState(false);
+  const [examSubmittedTime, setExamSubmittedTime] = useState<number | undefined>(undefined);
 
-  // Subscribe to dynamic exam questions
+  // Synchronize with Firebase
   useEffect(() => {
-    const unsub = firebaseService.subscribeToExam((data) => {
-      setExamData(data);
+    const unsubExam = firebaseService.subscribeToExam((data) => setExamData(data));
+    const unsubSession = firebaseService.subscribeToGlobalSession((session) => setGlobalSession(session));
+    const unsubStudents = firebaseService.subscribeToStudents((students) => {
+      setAllConnectedStudents(Object.values(students));
     });
-    return () => unsub();
+
+    return () => {
+      unsubExam();
+      unsubSession();
+      unsubStudents();
+    };
   }, []);
 
   // Ref to track latest state for event handlers without stale closures
@@ -69,7 +87,6 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
     selectedAnswers,
     matricula,
     fullName,
-    examStartTime,
     cheatLogs,
     activeQuestions,
     totalExamPoints,
@@ -84,7 +101,6 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
       selectedAnswers,
       matricula,
       fullName,
-      examStartTime,
       cheatLogs,
       activeQuestions,
       totalExamPoints,
@@ -92,27 +108,46 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
     };
   });
 
-  // Calculate current score based on active questions
-  const calculateScore = useCallback((answers: Record<string, number>) => {
+  // Calculate score for any question type
+  const calculateScore = useCallback((answers: Record<string, any>) => {
     let earnedPoints = 0;
     const questions = stateRef.current.activeQuestions;
     const maxPts = stateRef.current.totalExamPoints;
 
     questions.forEach((q) => {
-      if (answers[q.id] === q.correctAnswer) {
-        earnedPoints += q.points;
+      const studentAns = answers[q.id];
+      if (studentAns === undefined || studentAns === null) return;
+
+      if (q.type === 'opcion_multiple') {
+        if (studentAns === q.correctAnswer) {
+          earnedPoints += q.points;
+        }
+      } else if (q.type === 'relacionar' && q.pairs && q.pairs.length > 0) {
+        const matches: Record<string, string> = studentAns || {};
+        let rightPairs = 0;
+        q.pairs.forEach((p) => {
+          if (matches[p.id] === p.right) rightPairs++;
+        });
+        const pairScore = Math.round((q.points * rightPairs) / q.pairs.length);
+        earnedPoints += pairScore;
+      } else if (q.type === 'abierta') {
+        // Open-ended: gives provisional credit if answered with substance (> 10 chars)
+        if (typeof studentAns === 'string' && studentAns.trim().length >= 10) {
+          earnedPoints += q.points;
+        }
       }
     });
+
     const percentage = maxPts > 0 ? Math.round((earnedPoints / maxPts) * 100) : 0;
     return { earnedPoints, percentage };
   }, []);
 
-  // Sync current student state to Firebase
+  // Sync to Cloud
   const syncToCloud = useCallback(async (
     statusOverride?: StudentStatus, 
     warningsOverride?: number, 
     logsOverride?: CheatLog[],
-    answersOverride?: Record<string, number>
+    answersOverride?: Record<string, any>
   ) => {
     const curMatricula = stateRef.current.matricula.trim().toUpperCase();
     if (!curMatricula) return;
@@ -130,7 +165,7 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
       examId: 'quimica_general_2026',
       examTitle: stateRef.current.examTitle || 'Examen de Química',
       status: status,
-      startedAt: stateRef.current.examStartTime || Date.now(),
+      startedAt: Date.now(),
       submittedAt: status === 'submitted' || status === 'forced_submission_cheat' ? Date.now() : undefined,
       currentQuestionIndex: currentQuestionIdx,
       answers: answers,
@@ -145,11 +180,73 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
     await firebaseService.syncStudent(studentRecord);
   }, [calculateScore, currentQuestionIdx]);
 
+  // Transition from Waiting Room to Active Exam when Teacher Starts
+  useEffect(() => {
+    if (isRegistered && examStatus === 'waiting' && globalSession.status === 'active') {
+      soundManager.stopLobbyGroove();
+      // Start 3... 2... 1... countdown!
+      setCountdownStartNumber(3);
+      soundManager.playCountdownTick(false);
+
+      const t1 = setTimeout(() => {
+        setCountdownStartNumber(2);
+        soundManager.playCountdownTick(false);
+      }, 1000);
+
+      const t2 = setTimeout(() => {
+        setCountdownStartNumber(1);
+        soundManager.playCountdownTick(false);
+      }, 2000);
+
+      const t3 = setTimeout(() => {
+        setCountdownStartNumber(null);
+        soundManager.playCountdownTick(true);
+        soundManager.playSuccessChime();
+        setIsExamStarted(true);
+        setExamStatus('in_progress');
+        syncToCloud('in_progress');
+      }, 3000);
+
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+        clearTimeout(t3);
+      };
+    }
+  }, [isRegistered, examStatus, globalSession.status, syncToCloud]);
+
+  // Global Synchronized Timer
+  useEffect(() => {
+    if (!isExamStarted || examStatus !== 'in_progress') return;
+
+    const updateTimer = () => {
+      if (globalSession.endsAt) {
+        const remaining = Math.max(0, Math.floor((globalSession.endsAt - Date.now()) / 1000));
+        setTimeRemaining(remaining);
+        if (remaining <= 0) {
+          // Timer expired: auto-submit
+          handleNormalSubmit();
+        }
+      } else {
+        // Fallback local
+        setTimeRemaining((prev) => {
+          if (prev <= 1) {
+            handleNormalSubmit();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [isExamStarted, examStatus, globalSession.endsAt]);
+
   // Handle Cheating / Tab Switching Detection
   const handleViolationDetected = useCallback((reason: string) => {
     const { isExamStarted, examStatus, warningsCount, cheatLogs } = stateRef.current;
-    
-    // Only trigger if exam is actively in progress
     if (!isExamStarted || examStatus !== 'in_progress') return;
 
     const newWarningNum = warningsCount + 1;
@@ -165,13 +262,11 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
     setActiveWarningModal(newWarningNum);
 
     if (newWarningNum >= 3) {
-      // 3rd Warning: Force Submit Immediately
       soundManager.playCriticalAlarm();
       setExamStatus('forced_submission_cheat');
       setExamSubmittedTime(Date.now());
       syncToCloud('forced_submission_cheat', newWarningNum, updatedLogs);
     } else {
-      // 1st or 2nd Warning
       soundManager.playWarningAlarm();
       syncToCloud('in_progress', newWarningNum, updatedLogs);
     }
@@ -184,7 +279,6 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
     const handleVisibilityChange = () => {
       if (document.hidden || document.visibilityState === 'hidden') {
         const now = Date.now();
-        // Debounce within 1 second to avoid duplicate events from blur+visibilitychange
         if (now - lastBlurTimestamp > 1000) {
           lastBlurTimestamp = now;
           handleViolationDetected('Cambio de pestaña o navegador minimizado (visibilitychange)');
@@ -209,47 +303,27 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
     };
   }, [handleViolationDetected]);
 
-  // Countdown Timer
-  useEffect(() => {
-    if (!isExamStarted || examStatus !== 'in_progress') return;
-
-    const interval = setInterval(() => {
-      setTimeRemaining((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          handleNormalSubmit();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [isExamStarted, examStatus]);
-
-  // Start Exam
-  const handleStartExam = (e: React.FormEvent) => {
+  // Step 1: Join Waiting Room (Lobby)
+  const handleJoinWaitingRoom = (e: React.FormEvent) => {
     e.preventDefault();
+    setRegistrationError(null);
+
     if (!fullName.trim() || !matricula.trim()) {
-      alert('Por favor completa tu Nombre y tu Código/Matrícula para continuar.');
+      setRegistrationError('Por favor completa tu Nombre y tu Código/Matrícula para continuar.');
       return;
     }
     if (!hasAcceptedRules) {
-      alert('Debes confirmar que has leído las normas anti-trampas.');
+      setRegistrationError('Debes confirmar que has leído y aceptas las normas anti-trampas.');
       return;
     }
 
-    const startTimestamp = Date.now();
-    setExamStartTime(startTimestamp);
-    setIsExamStarted(true);
-    setExamStatus('in_progress');
+    soundManager.playClick();
+    setIsRegistered(true);
+    setExamStatus('waiting');
     setWarningsCount(0);
     setCheatLogs([]);
     setSelectedAnswers({});
     setCurrentQuestionIdx(0);
-    setTimeRemaining(15 * 60);
-
-    soundManager.playClick();
 
     const initialStudent: StudentExamState = {
       id: matricula.trim().toUpperCase(),
@@ -257,8 +331,8 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
       fullName: fullName.trim(),
       examId: 'quimica_general_2026',
       examTitle: examData.title,
-      status: 'in_progress',
-      startedAt: startTimestamp,
+      status: 'waiting',
+      joinedWaitingAt: Date.now(),
       currentQuestionIndex: 0,
       answers: {},
       score: 0,
@@ -271,20 +345,29 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
     firebaseService.syncStudent(initialStudent);
   };
 
-  // Select Option
-  const handleSelectOption = (questionId: string, optionIdx: number) => {
+  // Exit Waiting Room
+  const handleExitWaitingRoom = () => {
+    if (matricula.trim()) {
+      firebaseService.deleteStudent(matricula.trim().toUpperCase());
+    }
+    setIsRegistered(false);
+    setExamStatus('not_started');
+  };
+
+  // Handle Answer Changes
+  const handleAnswerChange = (questionId: string, answer: any) => {
     if (examStatus !== 'in_progress') return;
     soundManager.playClick();
 
     const updated = {
       ...selectedAnswers,
-      [questionId]: optionIdx
+      [questionId]: answer
     };
     setSelectedAnswers(updated);
     syncToCloud('in_progress', warningsCount, cheatLogs, updated);
   };
 
-  // Normal Submit
+  // Submit Exam
   const handleNormalSubmit = () => {
     setIsSubmitConfirmOpen(false);
     setExamStatus('submitted');
@@ -293,8 +376,8 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
 
     try {
       confetti({
-        particleCount: 80,
-        spread: 70,
+        particleCount: 90,
+        spread: 75,
         origin: { y: 0.6 }
       });
     } catch {
@@ -304,8 +387,9 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
     syncToCloud('submitted');
   };
 
-  // Restart / Retake
+  // Restart
   const handleRestart = () => {
+    setIsRegistered(false);
     setIsExamStarted(false);
     setExamStatus('not_started');
     setSelectedAnswers({});
@@ -325,28 +409,32 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
   const { earnedPoints, percentage } = calculateScore(selectedAnswers);
   const answeredCount = Object.keys(selectedAnswers).length;
 
-  if (activeQuestions.length === 0) {
-    return (
-      <div className="max-w-md mx-auto px-4 py-16 text-center">
-        <div className="w-16 h-16 rounded-2xl bg-slate-800 text-indigo-400 mx-auto flex items-center justify-center mb-4">
-          <Atom className="w-8 h-8 animate-spin" />
-        </div>
-        <h3 className="text-lg font-bold text-white">Cargando preguntas del examen...</h3>
-        <p className="text-xs text-slate-400 mt-1">
-          El profesor aún no ha publicado las preguntas o se están sincronizando con Firebase.
-        </p>
-      </div>
-    );
-  }
-
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
       {/* ========================================================
-          STEP 1: REGISTRATION & PROCTORING RULES
+          KAHOOT COUNTDOWN OVERLAY (3... 2... 1... ¡YA!)
           ======================================================== */}
-      {!isExamStarted && examStatus === 'not_started' && (
+      {countdownStartNumber !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-xl animate-in fade-in">
+          <div className="text-center">
+            <span className="text-xs uppercase font-extrabold tracking-widest text-indigo-400 mb-2 block">
+              ¡El profesor ha iniciado el examen!
+            </span>
+            <div className="text-8xl sm:text-9xl font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 animate-ping">
+              {countdownStartNumber}
+            </div>
+            <p className="text-sm font-bold text-white mt-4">
+              Preparando tus reactivos...
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          STAGE 1: LOGIN & RULES FORM
+          ======================================================== */}
+      {!isRegistered && examStatus === 'not_started' && (
         <div className="bg-slate-800/80 rounded-3xl border border-slate-700/80 p-6 sm:p-10 shadow-2xl backdrop-blur-xl">
-          {/* Header */}
           <div className="text-center max-w-2xl mx-auto mb-8">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 shadow-xl shadow-indigo-500/25 mb-4 text-white">
               <Atom className="w-8 h-8 animate-spin-slow" />
@@ -355,12 +443,11 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
               {examData.title}
             </h1>
             <p className="text-slate-400 mt-2 text-xs sm:text-sm">
-              Evaluación interactiva supervisada ({activeQuestions.length} reactivos • {totalExamPoints} puntos). Ingresa tus datos para comenzar.
+              Ingresa tus datos oficiales para unirte a la <strong>Sala de Espera</strong> del examen.
             </p>
           </div>
 
-          <form onSubmit={handleStartExam} className="max-w-xl mx-auto space-y-6">
-            {/* Student Name */}
+          <form onSubmit={handleJoinWaitingRoom} className="max-w-xl mx-auto space-y-6">
             <div>
               <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
                 Nombre Completo del Alumno *
@@ -375,12 +462,11 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   placeholder="Ej. Valeria Sofía Morales Castro"
-                  className="w-full pl-11 pr-4 py-3 bg-slate-900/90 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all text-sm font-medium"
+                  className="w-full pl-11 pr-4 py-3 bg-slate-900/90 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium"
                 />
               </div>
             </div>
 
-            {/* Matricula / Code */}
             <div>
               <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
                 Matrícula o Código de Estudiante *
@@ -395,15 +481,12 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
                   value={matricula}
                   onChange={(e) => setMatricula(e.target.value)}
                   placeholder="Ej. A01754820 o 2026-QUI-09"
-                  className="w-full pl-11 pr-4 py-3 bg-slate-900/90 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all text-sm font-medium font-mono uppercase"
+                  className="w-full pl-11 pr-4 py-3 bg-slate-900/90 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium font-mono uppercase"
                 />
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">
-                Este código identificará tu examen en el panel de supervisión en tiempo real del docente.
-              </p>
             </div>
 
-            {/* ANTI-CHEAT PLEDGE NOTICE */}
+            {/* Anti-cheat Pledge */}
             <div className="rounded-2xl bg-gradient-to-br from-amber-500/10 via-rose-500/10 to-indigo-500/10 border border-amber-500/30 p-4 sm:p-5">
               <div className="flex items-start space-x-3">
                 <div className="p-2 rounded-lg bg-amber-500/20 text-amber-400 shrink-0 mt-0.5">
@@ -411,23 +494,22 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
                 </div>
                 <div className="text-xs sm:text-sm text-slate-300 space-y-2">
                   <h4 className="font-bold text-amber-300 uppercase tracking-wide text-xs">
-                    Normativa del Sistema Anti-Trampas (Proctoring Activo)
+                    Normativa Anti-Trampas (Supervisión Activa)
                   </h4>
                   <ul className="list-disc pl-4 space-y-1 text-slate-300 text-xs">
                     <li>
-                      <strong>Detección de pestañas:</strong> Si cambias de pestaña, minimizas el navegador o abres otra aplicación, el sistema registrará una falta de forma instantánea.
+                      <strong>Sala de Espera:</strong> Al entrar esperarás a que el profesor inicie el temporizador para todos.
                     </li>
                     <li>
-                      <strong>Alerta al profesor:</strong> Cada intento de cambiar de ventana se notifica en el panel del docente con fecha y hora exacta.
+                      <strong>Detección de pestañas:</strong> Si sales de la pestaña o minimizas el navegador, se registrará una infracción.
                     </li>
                     <li>
-                      <strong className="text-rose-400">Regla de las 3 faltas:</strong> A la 3ra advertencia, el sistema bloqueará tu examen y se enviará <em>automáticamente</em> con la calificación obtenida hasta ese instante.
+                      <strong className="text-rose-400">Límite de 3 faltas:</strong> A la 3ra falta el examen se enviará automáticamente.
                     </li>
                   </ul>
                 </div>
               </div>
 
-              {/* Checkbox agreement */}
               <label className="flex items-center space-x-3 mt-4 pt-3 border-t border-amber-500/20 cursor-pointer">
                 <input
                   type="checkbox"
@@ -436,18 +518,24 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
                   className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-900 border-slate-600 cursor-pointer"
                 />
                 <span className="text-xs font-semibold text-slate-200">
-                  He leído y acepto las condiciones de supervisión anti-trampas para este examen.
+                  Acepto las condiciones y prometo no cambiar de ventana durante la prueba.
                 </span>
               </label>
             </div>
 
-            {/* Submit Button */}
+            {registrationError && (
+              <div className="p-3.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-semibold flex items-center space-x-2 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                <span>{registrationError}</span>
+              </div>
+            )}
+
             <button
               type="submit"
               disabled={!hasAcceptedRules || !fullName.trim() || !matricula.trim()}
               className="w-full py-3.5 px-6 rounded-xl font-bold text-sm tracking-wide text-white bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center space-x-2"
             >
-              <span>Comenzar Examen</span>
+              <span>Entrar a la Sala de Espera</span>
               <ChevronRight className="w-4 h-4" />
             </button>
           </form>
@@ -455,13 +543,39 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
       )}
 
       {/* ========================================================
-          STEP 2: ACTIVE EXAM IN PROGRESS
+          STAGE 2: KAHOOT STYLE WAITING ROOM
+          ======================================================== */}
+      {isRegistered && examStatus === 'waiting' && (
+        <StudentWaitingRoom
+          student={{
+            id: matricula.toUpperCase(),
+            matricula: matricula.toUpperCase(),
+            fullName,
+            examId: 'quimica_general_2026',
+            examTitle: examData.title,
+            status: 'waiting',
+            currentQuestionIndex: 0,
+            answers: {},
+            score: 0,
+            maxScore: totalExamPoints,
+            percentage: 0,
+            cheatWarningsCount: 0,
+            cheatLogs: [],
+            lastActive: Date.now()
+          }}
+          session={globalSession}
+          connectedStudents={allConnectedStudents}
+          onExitWaitingRoom={handleExitWaitingRoom}
+        />
+      )}
+
+      {/* ========================================================
+          STAGE 3: ACTIVE EXAM IN PROGRESS
           ======================================================== */}
       {isExamStarted && examStatus === 'in_progress' && currentQ && (
         <div className="space-y-6">
-          {/* Top Proctoring Bar */}
+          {/* Proctoring Bar */}
           <div className="bg-slate-800/90 rounded-2xl border border-slate-700/80 p-4 sm:p-5 shadow-lg backdrop-blur-md flex flex-wrap items-center justify-between gap-4">
-            {/* Student Info */}
             <div className="flex items-center space-x-3">
               <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold">
                 {fullName.charAt(0).toUpperCase()}
@@ -476,8 +590,8 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
               </div>
             </div>
 
-            {/* Anti-cheat Warnings Badge */}
             <div className="flex items-center space-x-2">
+              {/* Warnings Counter */}
               <div 
                 className={`px-3 py-1.5 rounded-xl border flex items-center space-x-2 text-xs font-bold transition-all ${
                   warningsCount === 0
@@ -488,31 +602,27 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
                 }`}
               >
                 <ShieldAlert className="w-4 h-4" />
-                <span>
-                  Faltas: {warningsCount} / 3
-                </span>
-                {warningsCount >= 2 && (
-                  <span className="text-[10px] uppercase tracking-wider bg-rose-600 text-white px-1.5 py-0.5 rounded">
-                    ¡Peligro!
-                  </span>
-                )}
+                <span>Faltas: {warningsCount} / 3</span>
               </div>
 
-              {/* Timer */}
-              <div className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 flex items-center space-x-2 text-xs font-mono font-semibold text-slate-200">
-                <Clock className="w-4 h-4 text-indigo-400" />
+              {/* Synchronized Global Timer */}
+              <div className={`px-3.5 py-1.5 rounded-xl border flex items-center space-x-2 text-xs font-mono font-bold transition-colors ${
+                timeRemaining <= 120
+                  ? 'bg-rose-600 text-white border-rose-500 animate-pulse'
+                  : 'bg-slate-900 border-slate-700 text-slate-200'
+              }`}>
+                <Clock className="w-4 h-4 text-pink-400" />
                 <span>{formatTimer(timeRemaining)}</span>
               </div>
             </div>
           </div>
 
-          {/* Progress Indicators */}
-          <div className="bg-slate-800/60 rounded-xl border border-slate-700/60 p-3 sm:p-4">
+          {/* Progress Indicator */}
+          <div className="bg-slate-800/60 rounded-2xl border border-slate-700/60 p-3 sm:p-4">
             <div className="flex items-center justify-between text-xs text-slate-400 mb-2 font-medium">
               <span>Pregunta {currentQuestionIdx + 1} de {activeQuestions.length}</span>
-              <span>{answeredCount} de {activeQuestions.length} respondidas ({Math.round((answeredCount / activeQuestions.length) * 100)}%)</span>
+              <span>{answeredCount} respondidas ({Math.round((answeredCount / activeQuestions.length) * 100)}%)</span>
             </div>
-            {/* Progress Bar */}
             <div className="w-full bg-slate-700/50 h-2 rounded-full overflow-hidden">
               <div
                 className="bg-gradient-to-r from-indigo-500 to-pink-500 h-full rounded-full transition-all duration-300"
@@ -520,7 +630,7 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
               />
             </div>
 
-            {/* Question Quick Navigation Bubbles */}
+            {/* Quick Question Bubble Selector */}
             <div className="flex items-center space-x-2 mt-3 overflow-x-auto pb-1">
               {activeQuestions.map((q, idx) => {
                 const isAnswered = selectedAnswers[q.id] !== undefined;
@@ -530,7 +640,7 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
                     key={q.id}
                     type="button"
                     onClick={() => setCurrentQuestionIdx(idx)}
-                    className={`w-8 h-8 rounded-lg text-xs font-bold flex items-center justify-center transition-all ${
+                    className={`w-8 h-8 rounded-xl text-xs font-bold flex items-center justify-center transition-all ${
                       isCurrent
                         ? 'bg-indigo-600 text-white ring-2 ring-indigo-400'
                         : isAnswered
@@ -545,113 +655,55 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
             </div>
           </div>
 
-          {/* Current Question Card */}
-          <div className="bg-slate-800/80 rounded-2xl border border-slate-700 p-6 sm:p-8 shadow-xl">
-            {/* Topic & Points Badge */}
-            <div className="flex items-center justify-between mb-4">
-              <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                <Flame className="w-3.5 h-3.5 mr-1 text-pink-400" />
-                {currentQ.topic || 'Reactivo'}
-              </span>
-              <span className="text-xs font-bold text-slate-400 font-mono">
-                Valor: {currentQ.points} pts
-              </span>
-            </div>
+          {/* Dynamic Question Card (Supports multiple choice, open-ended, matching + image) */}
+          <QuestionCard
+            question={currentQ}
+            questionNumber={currentQuestionIdx + 1}
+            currentAnswer={selectedAnswers[currentQ.id]}
+            onAnswerChange={handleAnswerChange}
+          />
 
-            {/* Question Title */}
-            <h2 className="text-lg sm:text-xl font-bold text-white leading-relaxed mb-4">
-              {currentQ.question}
-            </h2>
+          {/* Navigation Controls */}
+          <div className="flex items-center justify-between pt-2">
+            <button
+              type="button"
+              onClick={() => setCurrentQuestionIdx((prev) => Math.max(0, prev - 1))}
+              disabled={currentQuestionIdx === 0}
+              className="flex items-center space-x-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed bg-slate-900/60 border border-slate-700 hover:border-slate-600 transition-all"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              <span>Anterior</span>
+            </button>
 
-            {/* Formula / Chemical Context (if present) */}
-            {currentQ.formula && (
-              <div className="mb-6 p-3.5 bg-slate-900/90 rounded-xl border border-slate-700/80 flex items-center justify-center">
-                <span className="font-mono text-sm sm:text-base font-bold text-pink-400 tracking-wider">
-                  {currentQ.formula}
-                </span>
-              </div>
-            )}
-
-            {/* Options List */}
-            <div className="space-y-3 mb-8">
-              {currentQ.options.map((opt, optIdx) => {
-                const isSelected = selectedAnswers[currentQ.id] === optIdx;
-                const letter = String.fromCharCode(65 + optIdx); // A, B, C, D
-                return (
-                  <button
-                    key={optIdx}
-                    type="button"
-                    onClick={() => handleSelectOption(currentQ.id, optIdx)}
-                    className={`w-full text-left p-4 rounded-xl border transition-all flex items-center space-x-3.5 ${
-                      isSelected
-                        ? 'bg-gradient-to-r from-indigo-600/30 to-purple-600/30 border-indigo-500 text-white shadow-md shadow-indigo-600/10'
-                        : 'bg-slate-900/60 border-slate-700/80 text-slate-300 hover:bg-slate-900 hover:border-slate-600'
-                    }`}
-                  >
-                    <div
-                      className={`w-7 h-7 rounded-lg text-xs font-bold flex items-center justify-center font-mono shrink-0 transition-colors ${
-                        isSelected
-                          ? 'bg-indigo-600 text-white shadow-sm'
-                          : 'bg-slate-800 text-slate-400'
-                      }`}
-                    >
-                      {letter}
-                    </div>
-                    <span className="text-sm font-medium leading-snug flex-1">
-                      {opt}
-                    </span>
-                    {isSelected && (
-                      <CheckCircle2 className="w-5 h-5 text-indigo-400 shrink-0" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Bottom Question Controls */}
-            <div className="flex items-center justify-between pt-4 border-t border-slate-700/60">
+            {currentQuestionIdx < activeQuestions.length - 1 ? (
               <button
                 type="button"
-                onClick={() => setCurrentQuestionIdx((prev) => Math.max(0, prev - 1))}
-                disabled={currentQuestionIdx === 0}
-                className="flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed bg-slate-900/50 border border-slate-700 hover:border-slate-600 transition-all"
+                onClick={() => setCurrentQuestionIdx((prev) => Math.min(activeQuestions.length - 1, prev + 1))}
+                className="flex items-center space-x-1.5 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 shadow-md shadow-indigo-600/20 transition-all"
               >
-                <ChevronLeft className="w-4 h-4" />
-                <span>Anterior</span>
+                <span>Siguiente</span>
+                <ChevronRight className="w-4 h-4" />
               </button>
-
-              {currentQuestionIdx < activeQuestions.length - 1 ? (
-                <button
-                  type="button"
-                  onClick={() => setCurrentQuestionIdx((prev) => Math.min(activeQuestions.length - 1, prev + 1))}
-                  className="flex items-center space-x-1.5 px-5 py-2 rounded-xl text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 shadow-md shadow-indigo-600/20 transition-all"
-                >
-                  <span>Siguiente</span>
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setIsSubmitConfirmOpen(true)}
-                  className="flex items-center space-x-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-600/30 transition-all"
-                >
-                  <Send className="w-4 h-4" />
-                  <span>Finalizar Examen</span>
-                </button>
-              )}
-            </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsSubmitConfirmOpen(true)}
+                className="flex items-center space-x-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-600/30 transition-all"
+              >
+                <Send className="w-4 h-4" />
+                <span>Finalizar Examen</span>
+              </button>
+            )}
           </div>
         </div>
       )}
 
       {/* ========================================================
-          ANTI-CHEAT WARNING MODAL (Appears on Tab Switch)
+          ANTI-CHEAT WARNING MODAL
           ======================================================== */}
       {activeWarningModal !== null && examStatus === 'in_progress' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="max-w-md w-full bg-slate-900 border-2 border-rose-500/80 rounded-2xl p-6 sm:p-8 shadow-2xl shadow-rose-500/30 text-center relative overflow-hidden">
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-rose-500 animate-pulse" />
-
+          <div className="max-w-md w-full bg-slate-900 border-2 border-rose-500/80 rounded-3xl p-6 sm:p-8 shadow-2xl text-center relative overflow-hidden">
             <div className="w-16 h-16 mx-auto rounded-2xl bg-rose-500/20 text-rose-500 flex items-center justify-center mb-4 border border-rose-500/40">
               <AlertOctagon className="w-9 h-9 animate-bounce" />
             </div>
@@ -671,37 +723,19 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
             <div className="bg-slate-800/90 border border-slate-700/80 rounded-xl p-3.5 my-4 text-xs text-left text-slate-300 space-y-1">
               <div className="flex items-center text-amber-400 font-bold mb-1">
                 <AlertTriangle className="w-4 h-4 mr-1.5 shrink-0" />
-                <span>Reporte automático enviado al profesor:</span>
+                <span>Notificación enviada al profesor en vivo:</span>
               </div>
-              <p className="font-mono text-slate-400">
-                • Alumno: <span className="text-white">{fullName}</span> ({matricula})
-              </p>
-              <p className="font-mono text-slate-400">
-                • Evento: Cambio de ventana ({new Date().toLocaleTimeString()})
-              </p>
-              <p className="font-mono text-rose-400 font-semibold">
-                • Advertencias acumuladas: {activeWarningModal} de 3 permitidas.
-              </p>
+              <p className="font-mono text-slate-400">• Alumno: {fullName} ({matricula})</p>
+              <p className="font-mono text-slate-400">• Evento: Salida de pestaña a las {new Date().toLocaleTimeString()}</p>
+              <p className="font-mono text-rose-400 font-semibold">• Faltas acumuladas: {activeWarningModal} de 3 permitidas.</p>
             </div>
-
-            {activeWarningModal === 1 && (
-              <p className="text-xs text-amber-300 font-medium">
-                Esta es tu 1ra advertencia. Por favor permanece en esta pantalla hasta concluir la prueba.
-              </p>
-            )}
-
-            {activeWarningModal === 2 && (
-              <p className="text-xs text-rose-300 font-bold">
-                ¡ATENCIÓN! Estás a UNA sola falta de que tu examen sea CANCELADO y expulsado con tu nota actual.
-              </p>
-            )}
 
             <button
               type="button"
               onClick={() => setActiveWarningModal(null)}
-              className="mt-5 w-full py-3 px-5 rounded-xl font-bold text-sm text-white bg-rose-600 hover:bg-rose-500 shadow-lg shadow-rose-600/30 transition-all uppercase tracking-wider"
+              className="mt-4 w-full py-3 px-5 rounded-xl font-bold text-sm text-white bg-rose-600 hover:bg-rose-500 shadow-lg transition-all uppercase tracking-wider"
             >
-              Comprendo y continúo mi examen
+              Comprendo y vuelvo a mi examen
             </button>
           </div>
         </div>
@@ -711,29 +745,29 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
           CONFIRM SUBMISSION MODAL
           ======================================================== */}
       {isSubmitConfirmOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in">
-          <div className="max-w-md w-full bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl text-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+          <div className="max-w-md w-full bg-slate-900 border border-slate-700 rounded-3xl p-6 shadow-2xl text-center">
             <div className="w-12 h-12 mx-auto rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center mb-4">
               <HelpCircle className="w-6 h-6" />
             </div>
             <h3 className="text-lg font-bold text-white">¿Estás seguro de enviar tu examen?</h3>
             <p className="text-xs text-slate-400 mt-2">
               Has respondido <strong className="text-indigo-400">{answeredCount}</strong> de{' '}
-              <strong>{activeQuestions.length}</strong> preguntas. Una vez enviado no podrás modificar tus respuestas.
+              <strong>{activeQuestions.length}</strong> preguntas.
             </p>
 
             <div className="flex items-center space-x-3 mt-6">
               <button
                 type="button"
                 onClick={() => setIsSubmitConfirmOpen(false)}
-                className="flex-1 py-2.5 px-4 rounded-xl text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors"
+                className="flex-1 py-2.5 px-4 rounded-xl text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700"
               >
-                Revisar preguntas
+                Revisar
               </button>
               <button
                 type="button"
                 onClick={handleNormalSubmit}
-                className="flex-1 py-2.5 px-4 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 shadow-md shadow-emerald-600/30 transition-colors"
+                className="flex-1 py-2.5 px-4 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 shadow-md"
               >
                 Sí, enviar ahora
               </button>
@@ -743,15 +777,15 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
       )}
 
       {/* ========================================================
-          STEP 3: RESULTS & PEDAGOGICAL FEEDBACK
+          STAGE 4: RESULTS & COMPREHENSIVE FEEDBACK
           ======================================================== */}
       {(examStatus === 'submitted' || examStatus === 'forced_submission_cheat') && (
         <div className="space-y-8 animate-in fade-in duration-300">
           {/* Status Alert Banner */}
           {examStatus === 'forced_submission_cheat' ? (
-            <div className="rounded-2xl bg-rose-500/15 border-2 border-rose-500/60 p-6 shadow-2xl">
+            <div className="rounded-3xl bg-rose-500/15 border-2 border-rose-500/60 p-6 shadow-2xl">
               <div className="flex items-start space-x-4">
-                <div className="p-3 rounded-xl bg-rose-600 text-white shrink-0 shadow-lg shadow-rose-600/30">
+                <div className="p-3 rounded-2xl bg-rose-600 text-white shrink-0 shadow-lg shadow-rose-600/30">
                   <ShieldAlert className="w-7 h-7" />
                 </div>
                 <div>
@@ -762,42 +796,40 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
                     Examen Cancelado y Enviado Automáticamente
                   </h2>
                   <p className="text-sm text-slate-300 mt-1.5 leading-relaxed">
-                    Alcanzaste el límite máximo de <strong>3 advertencias por cambio de ventana o pestaña</strong>. 
-                    El sistema bloqueó la prueba y envió tus respuestas acumuladas hasta la última falta registrada.
+                    Alcanzaste el límite de <strong>3 advertencias por cambio de pestaña</strong>. El sistema bloqueó la prueba y envió tus respuestas hasta la última falta registrada.
                   </p>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="rounded-2xl bg-emerald-500/15 border border-emerald-500/40 p-6 shadow-xl">
+            <div className="rounded-3xl bg-emerald-500/15 border border-emerald-500/40 p-6 shadow-xl">
               <div className="flex items-center space-x-4">
-                <div className="p-3 rounded-xl bg-emerald-600 text-white shrink-0 shadow-lg shadow-emerald-600/30">
+                <div className="p-3 rounded-2xl bg-emerald-600 text-white shrink-0 shadow-lg">
                   <CheckCircle2 className="w-7 h-7" />
                 </div>
                 <div>
                   <h2 className="text-xl sm:text-2xl font-bold text-emerald-300">
-                    ¡Examen Enviado con Éxito!
+                    ¡Examen Entregado con Éxito!
                   </h2>
                   <p className="text-xs sm:text-sm text-slate-300 mt-1">
-                    Tus respuestas y comprobante de integridad fueron registrados en la base de datos en tiempo real.
+                    Tus respuestas y comprobante de integridad fueron registrados en tiempo real.
                   </p>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Student Score Summary Card */}
-          <div className="bg-slate-800/90 rounded-2xl border border-slate-700/80 p-6 sm:p-8 shadow-xl">
+          {/* Score Card */}
+          <div className="bg-slate-800/90 rounded-3xl border border-slate-700/80 p-6 sm:p-8 shadow-xl">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
-              {/* Score Big Pill */}
               <div className="text-center md:border-r border-slate-700/80 md:pr-6">
                 <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
                   Calificación Final
                 </p>
-                <div className="text-4xl sm:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-purple-300 to-pink-400">
+                <div className="text-4xl sm:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-purple-300 to-pink-400">
                   {earnedPoints} <span className="text-2xl text-slate-500 font-normal">/ {totalExamPoints}</span>
                 </div>
-                <div className="mt-2 inline-flex items-center px-3 py-1 rounded-full text-xs font-extrabold uppercase tracking-wider">
+                <div className="mt-2 inline-flex items-center px-3 py-1 rounded-full text-xs font-extrabold uppercase">
                   {percentage >= 60 ? (
                     <span className="text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3 py-0.5 rounded-full">
                       Aprobado ({percentage}%)
@@ -810,7 +842,6 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
                 </div>
               </div>
 
-              {/* Integrity & Metadata */}
               <div className="space-y-2.5 text-xs text-slate-300 md:col-span-2">
                 <div className="flex justify-between py-1.5 border-b border-slate-700/60">
                   <span className="text-slate-400">Alumno:</span>
@@ -827,7 +858,7 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
                   </span>
                 </div>
                 <div className="flex justify-between py-1.5">
-                  <span className="text-slate-400">Hora de envío:</span>
+                  <span className="text-slate-400">Hora de entrega:</span>
                   <span className="font-mono text-slate-300">
                     {examSubmittedTime ? new Date(examSubmittedTime).toLocaleTimeString() : new Date().toLocaleTimeString()}
                   </span>
@@ -835,16 +866,15 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
               </div>
             </div>
 
-            {/* If there were cheat logs, display an audit box */}
             {cheatLogs.length > 0 && (
-              <div className="mt-6 p-4 rounded-xl bg-slate-900/90 border border-rose-500/30">
+              <div className="mt-6 p-4 rounded-2xl bg-slate-900/90 border border-rose-500/30">
                 <h4 className="text-xs font-bold text-rose-400 uppercase tracking-wider mb-2 flex items-center">
                   <ShieldAlert className="w-4 h-4 mr-1.5" />
-                  Bitácora de Salidas de Pestaña Detectadas ({cheatLogs.length}):
+                  Bitácora de Salidas de Pestaña ({cheatLogs.length}):
                 </h4>
                 <div className="space-y-1.5">
                   {cheatLogs.map((log, idx) => (
-                    <div key={idx} className="text-[11px] font-mono text-slate-300 flex items-center justify-between bg-slate-800/60 px-3 py-1.5 rounded">
+                    <div key={idx} className="text-[11px] font-mono text-slate-300 flex items-center justify-between bg-slate-800/60 px-3 py-1.5 rounded-xl">
                       <span>Falta #{log.warningNumber}: {log.reason}</span>
                       <span className="text-slate-400">{new Date(log.timestamp).toLocaleTimeString()}</span>
                     </div>
@@ -854,121 +884,111 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
             )}
           </div>
 
-          {/* Retroalimentación Detallada Pregunta por Pregunta */}
+          {/* Detailed Question Review */}
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-white flex items-center space-x-2">
-                <Award className="w-5 h-5 text-indigo-400" />
-                <span>Retroalimentación Pedagógica Detallada</span>
-              </h3>
-              <span className="text-xs text-slate-400">
-                {activeQuestions.filter((q) => selectedAnswers[q.id] === q.correctAnswer).length} de {activeQuestions.length} aciertos
-              </span>
-            </div>
+            <h3 className="text-lg font-bold text-white flex items-center space-x-2">
+              <Award className="w-5 h-5 text-indigo-400" />
+              <span>Retroalimentación Pedagógica de Reactivos</span>
+            </h3>
 
             {activeQuestions.map((q, idx) => {
-              const studentAnswerIdx = selectedAnswers[q.id];
-              const isCorrect = studentAnswerIdx === q.correctAnswer;
+              const studentAnswer = selectedAnswers[q.id];
 
               return (
-                <div
-                  key={q.id}
-                  className={`rounded-2xl border p-5 sm:p-6 transition-all ${
-                    isCorrect
-                      ? 'bg-emerald-950/20 border-emerald-500/30'
-                      : 'bg-rose-950/20 border-rose-500/30'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-4 mb-3">
+                <div key={q.id} className="rounded-3xl border border-slate-700/80 bg-slate-800/70 p-5 sm:p-6 space-y-3">
+                  <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-2">
-                      <span className="text-xs font-bold text-slate-400 font-mono">
-                        Pregunta {idx + 1}
-                      </span>
-                      <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                        {q.topic}
+                      <span className="text-xs font-bold text-slate-400 font-mono">Pregunta {idx + 1}</span>
+                      <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700 uppercase">
+                        {q.type.replace('_', ' ')}
                       </span>
                     </div>
-                    {isCorrect ? (
-                      <span className="inline-flex items-center text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
-                        <CheckCircle2 className="w-3.5 h-3.5 mr-1 text-emerald-400" />
-                        +{q.points} pts
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center text-xs font-bold text-rose-400 bg-rose-500/10 px-2.5 py-1 rounded-full border border-rose-500/20">
-                        <XCircle className="w-3.5 h-3.5 mr-1 text-rose-400" />
-                        0 pts
-                      </span>
-                    )}
+                    <span className="text-xs font-bold text-slate-300 font-mono">
+                      {q.points} pts
+                    </span>
                   </div>
 
-                  <h4 className="text-sm sm:text-base font-bold text-white mb-3">
+                  <h4 className="text-sm sm:text-base font-bold text-white">
                     {q.question}
                   </h4>
 
-                  {q.formula && (
-                    <div className="mb-3 px-3 py-1.5 rounded bg-slate-900/80 font-mono text-xs font-semibold text-pink-400 inline-block">
-                      {q.formula}
+                  {q.imageUrl && (
+                    <div className="my-2 max-w-sm rounded-xl overflow-hidden border border-slate-700">
+                      <img src={q.imageUrl} alt="" className="max-h-48 w-full object-cover" />
                     </div>
                   )}
 
-                  {/* Options Review */}
-                  <div className="space-y-2 mb-4">
-                    {q.options.map((opt, optIdx) => {
-                      const isStudentPick = studentAnswerIdx === optIdx;
-                      const isTheCorrectOne = q.correctAnswer === optIdx;
+                  {/* Multiple choice review */}
+                  {q.type === 'opcion_multiple' && q.options && (
+                    <div className="space-y-1.5 text-xs">
+                      {q.options.map((opt, optIdx) => {
+                        const isStudent = studentAnswer === optIdx;
+                        const isCorrect = q.correctAnswer === optIdx;
+                        return (
+                          <div
+                            key={optIdx}
+                            className={`p-2.5 rounded-xl border flex items-center justify-between ${
+                              isCorrect
+                                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200 font-semibold'
+                                : isStudent
+                                ? 'bg-rose-500/15 border-rose-500/40 text-rose-200'
+                                : 'bg-slate-900/40 border-slate-800 text-slate-400'
+                            }`}
+                          >
+                            <span>{String.fromCharCode(65 + optIdx)}) {opt}</span>
+                            {isCorrect && <span className="text-emerald-400 font-bold">✓ Correcta</span>}
+                            {isStudent && !isCorrect && <span className="text-rose-400 font-bold">✗ Tu respuesta</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
-                      let rowStyle = 'bg-slate-900/40 border-slate-800 text-slate-400';
-                      if (isTheCorrectOne) {
-                        rowStyle = 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200 font-semibold';
-                      } else if (isStudentPick && !isCorrect) {
-                        rowStyle = 'bg-rose-500/15 border-rose-500/40 text-rose-200';
-                      }
-
-                      return (
-                        <div
-                          key={optIdx}
-                          className={`p-3 rounded-xl border text-xs sm:text-sm flex items-center justify-between ${rowStyle}`}
-                        >
-                          <div className="flex items-center space-x-2.5">
-                            <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-slate-800/80 font-bold">
-                              {String.fromCharCode(65 + optIdx)}
+                  {/* Matching review */}
+                  {q.type === 'relacionar' && q.pairs && (
+                    <div className="space-y-2 text-xs">
+                      <p className="text-slate-400 font-semibold text-[11px]">Correspondencia de Columnas:</p>
+                      {q.pairs.map((p) => {
+                        const studentPick = (studentAnswer || {})[p.id];
+                        const isRight = studentPick === p.right;
+                        return (
+                          <div key={p.id} className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800 flex items-center justify-between">
+                            <span className="font-semibold text-white">{p.left}</span>
+                            <span className={`font-mono ${isRight ? 'text-emerald-400 font-bold' : 'text-rose-400'}`}>
+                              → {studentPick || '(Sin responder)'} {isRight ? '✓' : `(Correcta: ${p.right})`}
                             </span>
-                            <span>{opt}</span>
                           </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
-                          <div className="shrink-0 text-xs font-semibold">
-                            {isTheCorrectOne && (
-                              <span className="text-emerald-400 flex items-center">
-                                <CheckCircle2 className="w-4 h-4 mr-1" />
-                                Correcta
-                              </span>
-                            )}
-                            {isStudentPick && !isCorrect && (
-                              <span className="text-rose-400 flex items-center">
-                                <XCircle className="w-4 h-4 mr-1" />
-                                Tu respuesta
-                              </span>
-                            )}
-                          </div>
+                  {/* Open-ended review */}
+                  {q.type === 'abierta' && (
+                    <div className="space-y-2 text-xs">
+                      <div className="p-3 bg-slate-900/70 rounded-xl border border-slate-800 text-slate-300">
+                        <span className="font-bold text-indigo-400 block mb-1">Tu respuesta escrita:</span>
+                        <p className="italic">{studentAnswer || 'Sin respuesta'}</p>
+                      </div>
+                      {q.referenceAnswer && (
+                        <div className="p-3 bg-emerald-950/20 rounded-xl border border-emerald-500/30 text-emerald-300">
+                          <span className="font-bold block mb-1">Respuesta modelo / Criterio:</span>
+                          <p>{q.referenceAnswer}</p>
                         </div>
-                      );
-                    })}
-                  </div>
+                      )}
+                    </div>
+                  )}
 
-                  {/* Explanation from RETROALIMENTACION: */}
-                  <div className="bg-slate-900/70 rounded-xl p-3.5 border border-slate-800 text-xs text-slate-300">
-                    <p className="font-semibold text-indigo-300 mb-1 flex items-center">
-                      <Info className="w-3.5 h-3.5 mr-1" />
-                      Retroalimentación Pedagógica:
-                    </p>
-                    <p className="leading-relaxed text-slate-300">{q.explanation}</p>
+                  {/* Pedagogical Explanation */}
+                  <div className="bg-slate-900/80 rounded-2xl p-3.5 border border-slate-800 text-xs text-slate-300">
+                    <p className="font-semibold text-indigo-300 mb-1">💡 Retroalimentación pedagógica:</p>
+                    <p className="leading-relaxed">{q.explanation}</p>
                   </div>
                 </div>
               );
             })}
           </div>
 
-          {/* Action buttons */}
           <div className="flex flex-wrap items-center justify-between gap-4 pt-4">
             <button
               type="button"
@@ -985,7 +1005,7 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
                 onClick={onSwitchToTeacher}
                 className="flex items-center space-x-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 shadow-md shadow-indigo-600/30 transition-colors"
               >
-                <span>Ver cómo se reflejó esto en el Panel del Profesor</span>
+                <span>Ver Panel del Profesor</span>
                 <ChevronRight className="w-4 h-4" />
               </button>
             )}

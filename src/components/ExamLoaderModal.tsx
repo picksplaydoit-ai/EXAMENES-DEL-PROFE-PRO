@@ -269,25 +269,44 @@ RETROALIMENTACION: Se produce por transferencia de electrones.`}
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px]">
-                      {q.options.map((opt, optIdx) => {
-                        const isCorrect = optIdx === q.correctAnswer;
-                        return (
-                          <div
-                            key={optIdx}
-                            className={`p-1.5 px-2 rounded-lg flex items-center space-x-1.5 ${
-                              isCorrect
-                                ? 'bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30'
-                                : 'bg-slate-900/60 text-slate-400'
-                            }`}
-                          >
-                            <span className="font-mono font-bold text-[10px] w-4">{String.fromCharCode(65 + optIdx)})</span>
-                            <span className="truncate">{opt}</span>
-                            {isCorrect && <Check className="w-3 h-3 text-emerald-400 ml-auto shrink-0" />}
+                    {q.options && q.options.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px]">
+                        {q.options.map((opt, optIdx) => {
+                          const isCorrect = optIdx === q.correctAnswer;
+                          return (
+                            <div
+                              key={optIdx}
+                              className={`p-1.5 px-2 rounded-lg flex items-center space-x-1.5 ${
+                                isCorrect
+                                  ? 'bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30'
+                                  : 'bg-slate-900/60 text-slate-400'
+                              }`}
+                            >
+                              <span className="font-mono font-bold text-[10px] w-4">{String.fromCharCode(65 + optIdx)})</span>
+                              <span className="truncate">{opt}</span>
+                              {isCorrect && <Check className="w-3 h-3 text-emerald-400 ml-auto shrink-0" />}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {q.type === 'relacionar' && q.pairs && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px] p-2 rounded bg-slate-900/60 border border-slate-800">
+                        {q.pairs.map((p, pIdx) => (
+                          <div key={pIdx} className="flex items-center justify-between text-slate-300">
+                            <span className="font-semibold">{p.left}:</span>
+                            <span className="text-pink-300">{p.right}</span>
                           </div>
-                        );
-                      })}
-                    </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {q.type === 'abierta' && q.referenceAnswer && (
+                      <div className="text-[11px] p-2 rounded bg-purple-950/20 border border-purple-500/30 text-purple-300">
+                        <span className="font-bold">Criterio esperado:</span> {q.referenceAnswer}
+                      </div>
+                    )}
 
                     {q.explanation && (
                       <p className="text-[11px] text-slate-400 italic bg-slate-900/50 p-2 rounded">

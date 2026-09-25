@@ -1,56 +1,71 @@
-# 🧪 QuímicaQuiz - Exámenes con Carga de Texto Plano, Código QR y Anti-Trampas
+# 🧪 QuímicaQuiz - Sala de Espera Kahoot, Temporizador Global & Anti-Trampas
 
-Aplicación web completa para aplicar exámenes interactivos con **carga dinámica desde texto plano**, **generación de código QR para alumnos**, **control de base de datos** y **sistema anti-trampas con supervisión en vivo**.
+Aplicación web completa para aplicar exámenes interactivos en tiempo real con **Sala de Espera estilo Kahoot**, **Temporizador Global sincronizado**, **Carga desde texto plano (Opción Múltiple, Abierta, Relacionar e Imágenes)**, **Código QR dinámico**, **Control de Base de Datos** y **Sistema Anti-Trampas con supervisión en vivo**.
 
-Optimizada para desplegarse gratis en **Vercel** o utilizarse en un solo archivo independiente (`index.html`) con **CDN de Tailwind CSS**, **CDN de Firebase v10 Modular** y **CDN de QRious**.
+Lista para desplegarse gratis en **Vercel** o utilizarse en un solo archivo independiente (`index.html`) con **CDN de Tailwind CSS**, **CDN de Firebase v10 Modular**, **CDN de QRious** y **Web Audio API**.
 
 ---
 
-## 🌟 Tres Características Clave Incorporadas
+## 🌟 Características Principales
 
-### 1. 📝 Carga de Exámenes desde Texto Plano (Bloc de Notas o Chat)
-En el **Panel del Profesor**, puedes hacer clic en **"Cargar Examen (Texto)"**, escribir el título y pegar tu examen directamente. El analizador procesa automáticamente el siguiente formato estándar:
+### 1. 🎮 Sala de Espera & Temporizador Global (Estilo Kahoot)
+* **Ingreso y Sala de Espera:** Los alumnos ingresan con su Nombre y Matrícula y acceden a una sala de espera animada con música ambiente opcional y lista de compañeros conectados.
+* **Control en Vivo del Docente:**
+  * En el panel del profesor aparece la lista en tiempo real de los alumnos formados en la sala.
+  * Selector de **Tiempo de Examen** (en minutos, ej. 20 min).
+  * Botón **"🚀 Comenzar Examen para Todos"**: Firebase sincroniza el estado de la sesión y lanza una cuenta regresiva 3... 2... 1... simultánea en todas las pantallas.
+* **Temporizador Global:** Un reloj sincronizado descuenta el tiempo en todos los dispositivos. Si el tiempo llega a cero, el examen se envía automáticamente.
+
+---
+
+### 2. 📝 Carga desde Texto Plano (Múltiples Tipos de Preguntas con Imágenes)
+En el **Panel del Profesor**, haz clic en **"Cargar Examen (Texto Plano)"** para pegar preguntas en los siguientes formatos:
 
 ```text
-PREGUNTA: [Texto de la pregunta]
-A) [Opción 1]
-B) [Opción 2]
-C) [Opción 3]
-D) [Opción 4]
-CORRECTA: [A/B/C/D]
-RETROALIMENTACION: [Texto de explicación]
+-- TIPO: OPCION_MULTIPLE --
+PREGUNTA: ¿Qué tipo de enlace químico se forma entre un metal y un no metal por transferencia completa de electrones?
+IMAGEN: https://images.unsplash.com/photo-1532187863486-abf9dbad1b69?w=800
+A) Enlace Covalente Polar
+B) Enlace Iónico (Electrovalente)
+C) Enlace Metálico
+D) Enlace Covalente Apolar
+CORRECTA: B
+RETROALIMENTACION: El enlace iónico resulta de la gran diferencia de electronegatividad.
+
+-- TIPO: RELACIONAR --
+PREGUNTA: Relaciona cada sustancia química con su clasificación correspondiente:
+IMAGEN: https://images.unsplash.com/photo-1603126857599-f6e157fa2fe6?w=800
+PAR: NaCl | Sal binaria iónica
+PAR: H2SO4 | Ácido oxácido
+PAR: He | Gas noble
+PAR: NaOH | Base o hidróxido
+RETROALIMENTACION: NaCl es sal neutra, H2SO4 ácido fuerte, He gas noble y NaOH hidróxido alcalino.
+
+-- TIPO: ABIERTA --
+PREGUNTA: Explica el principio de conservación de la materia formulado por Lavoisier.
+IMAGEN: https://images.unsplash.com/photo-1507668077129-56e32842fceb?w=800
+RESPUESTA_MODELO: La materia no se crea ni se destruye, solo se transforma.
+RETROALIMENTACION: En toda reacción ordinaria la masa total de reactivos es igual a la de productos.
 ```
 
-* **Botón "Plantilla de Ejemplo":** Carga instantáneamente preguntas modelo de Química listas para probar o modificar.
-* **Sincronización en Tiempo Real:** Al hacer clic en *"Publicar y Cargar Examen"*, las preguntas se guardan en Firebase Realtime Database y se actualizan al instante en las pantallas de todos los alumnos.
+---
+
+### 3. 🛡️ Sistema Anti-Trampas (Proctoring en Tiempo Real)
+* **Detección continua:** Escucha los eventos `visibilitychange` (cambio de pestaña o minimizado) y `blur` (desenfoque o cambio de ventana/aplicación).
+* **Alarma Sonora y Advertencia en Pantalla:** Alarma sintetizada mediante Web Audio API y modal emergente con registro de la falta.
+* **Límite de 3 Faltas:** A la **3ra advertencia**, el examen se bloquea de forma definitiva y se envía automáticamente.
+* **Semáforo en el Panel del Profesor:** Muestra en vivo cuántas faltas acumula cada estudiante con badges de color (Verde: 0 faltas, Amarillo: 1 falta, Naranja: 2 faltas, Rojo: 3 faltas expulsado).
 
 ---
 
-### 2. 📱 Generación de Código QR y Control de Base de Datos
-* **Código QR Dinámico en Pantalla:** Al hacer clic en **"Mostrar Código QR"**, se genera un código QR grande y nítido con la URL exacta del examen. Los alumnos pueden escanearlo con la cámara de su celular para ingresar directamente a la prueba.
-  * Incluye botón para copiar el enlace y descargar la imagen del QR en PNG.
-* **Control de Base de Datos ("Limpiar / Nuevo Grupo"):**
-  * Incluye un botón para **vaciar y reiniciar los resultados anteriores** de los estudiantes en Firebase Realtime Database con un solo clic.
-  * Permite reutilizar el mismo examen con una nueva clase o grupo escolar sin borrar las preguntas.
+### 4. 📱 Código QR Dinámico y Control de Base de Datos
+* **Código QR Instantáneo:** Generado en pantalla para que los alumnos lo escaneen con la cámara de su celular y accedan directamente a la sala de espera.
+* **Limpiar / Nuevo Grupo:** Botón para reiniciar la base de datos de estudiantes en Firebase Realtime Database y devolver la sala al modo espera para reutilizar el examen con un nuevo grupo.
+* **Exportación CSV:** Exporta las calificaciones y bitácora de faltas para Excel / Google Sheets con un clic.
 
 ---
 
-### 3. 🛡️ Sistema Anti-Trampas (Proctoring Activo)
-* **Supervisión continua:** El sistema escucha los eventos de navegador `visibilitychange` y `blur`.
-* **Alerta en pantalla:** Si el alumno cambia de pestaña o minimiza la ventana, la aplicación emite una alarma sonora y muestra una advertencia en pantalla.
-* **Regla de las 3 faltas:** A la **3ra advertencia**, el examen se bloquea de manera definitiva y se envía automáticamente con las respuestas contestadas hasta ese momento.
-* **Retroalimentación pedagógica:** Al finalizar, el alumno recibe su nota sobre 100 puntos, revisión de reactivos correctos e incorrectos y la explicación configurada en `RETROALIMENTACION:`.
-
----
-
-### 4. 👨‍🏫 Panel del Docente (Monitor en Vivo)
-* **Tabla en tiempo real:** Muestra qué alumnos están en examen, su progreso (ej. 3/5 preguntas), calificación y conteo de faltas.
-* **Alerta sonora y visual instantánea:** Cuando un alumno sale de la pestaña, aparece una notificación roja en vivo en la pantalla del profesor.
-* **Exportación CSV:** Descarga la lista completa de notas con un clic para abrir en Excel o Google Sheets.
-
----
-
-## ⚙️ Configuración de Firebase Realtime Database (CDN v10)
+## ⚙️ Configuración de Firebase Realtime Database
 
 1. Ingresa a [console.firebase.google.com](https://console.firebase.google.com/) y crea un proyecto.
 2. Ve a **Compilación (Build) → Realtime Database** y haz clic en **Crear base de datos**.
@@ -63,7 +78,7 @@ RETROALIMENTACION: [Texto de explicación]
      }
    }
    ```
-4. En **Configuración del proyecto (engrane) → Tus apps → Web (`</>`)**, copia tu objeto:
+4. En **Configuración del proyecto → Tus apps → Web (`</>`)**, copia tu objeto `firebaseConfig`:
    ```javascript
    const firebaseConfig = {
      apiKey: "AIzaSy...",
@@ -75,24 +90,23 @@ RETROALIMENTACION: [Texto de explicación]
      appId: "1:123456789:web:abcdef"
    };
    ```
-5. Pega estas credenciales en el modal **"Modo Local / Configurar"** de la app, o en el archivo autónomo `index.html`.
+5. En la aplicación, haz clic en el botón superior **"Modo Local / Configurar"** y pega tu JSON o campos individuales.
+6. Si utilizas el archivo autónomo `index.html` (descargable en el modal de despliegue), pega este objeto dentro de la etiqueta `<script type="module">`.
 
 ---
 
-## 📦 CDN Utilizadas en la Versión Autónoma (`index.html`)
+## 🚀 Despliegue Gratis en Vercel
 
-Para la versión de un solo archivo ejecutable directamente sin instalar Node.js:
-* **Tailwind CSS:** `https://cdn.tailwindcss.com`
-* **QRious (Generador de Códigos QR):** `https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js`
-* **Firebase v10 Modular:**
-  * `https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js`
-  * `https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js`
+### Opción 1: Archivo Único `index.html` (Super Rápido)
+1. En el botón superior **"Desplegar en Vercel"**, descarga el archivo `index.html` autónomo.
+2. Sube ese archivo `index.html` a un repositorio en GitHub.
+3. En [vercel.com](https://vercel.com/), haz clic en **Add New Project → Import**, selecciona el repositorio y presiona **Deploy**. ¡Listo en 30 segundos!
 
----
-
-## 🚀 Despliegue en Vercel (Gratis en 1 Minuto)
-
-1. Descarga el archivo `standalone_index.html` (o usa el botón **"Descargar HTML Autónomo"** en la barra inferior de la aplicación).
-2. Súbelo a un repositorio de [GitHub](https://github.com/new) con el nombre `index.html`.
-3. Entra a [vercel.com/new](https://vercel.com/new), selecciona tu repositorio y presiona **Deploy**.
-4. ¡Listo! Obtendrás una URL pública segura HTTPS para proyectar el código QR a tus alumnos.
+### Opción 2: Proyecto React Completo (Vite)
+1. Sube este repositorio a tu cuenta de GitHub:
+   ```bash
+   git add .
+   git commit -m "feat: Exámenes con Sala Kahoot, Proctoring y Firebase"
+   git push origin main
+   ```
+2. Entra a [vercel.com](https://vercel.com/) e importa el repositorio. Vercel detectará automáticamente Vite y compilará la aplicación.

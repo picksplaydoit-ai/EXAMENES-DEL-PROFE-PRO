@@ -1,6 +1,8 @@
-// Web Audio API synthesizer for anti-cheat alarms and interactions
+// Web Audio API synthesizer for anti-cheat alarms, lobby music and interactions
 class SoundManager {
   private ctx: AudioContext | null = null;
+  private lobbyInterval: any = null;
+  private isLobbyPlaying = false;
 
   private getContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -106,7 +108,33 @@ class SoundManager {
     }
   }
 
-  // Fanfare when successfully submitted
+  // Countdown Beep (3, 2, 1)
+  playCountdownTick(isFinal: boolean = false) {
+    const ctx = this.getContext();
+    if (!ctx) return;
+
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = isFinal ? 'triangle' : 'sine';
+      osc.frequency.setValueAtTime(isFinal ? 880 : 440, now);
+
+      gain.gain.setValueAtTime(isFinal ? 0.2 : 0.1, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + (isFinal ? 0.35 : 0.15));
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now);
+      osc.stop(now + (isFinal ? 0.35 : 0.15));
+    } catch {
+      // Ignored
+    }
+  }
+
+  // Fanfare when successfully submitted or exam starts
   playSuccessChime() {
     const ctx = this.getContext();
     if (!ctx) return;
@@ -133,6 +161,63 @@ class SoundManager {
     } catch {
       // Ignored
     }
+  }
+
+  // Catchy Kahoot-style synthesized lobby melody
+  startLobbyGroove() {
+    if (this.isLobbyPlaying) return;
+    const ctx = this.getContext();
+    if (!ctx) return;
+
+    this.isLobbyPlaying = true;
+    const scale = [261.63, 329.63, 392.00, 523.25, 392.00, 329.63]; // C E G C G E
+    let noteIdx = 0;
+
+    this.lobbyInterval = setInterval(() => {
+      if (!this.isLobbyPlaying) return;
+      try {
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(scale[noteIdx % scale.length], now);
+
+        gain.gain.setValueAtTime(0.03, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start(now);
+        osc.stop(now + 0.25);
+        noteIdx++;
+      } catch {
+        // Ignored
+      }
+    }, 280);
+  }
+
+  stopLobbyGroove() {
+    this.isLobbyPlaying = false;
+    if (this.lobbyInterval) {
+      clearInterval(this.lobbyInterval);
+      this.lobbyInterval = null;
+    }
+  }
+
+  toggleLobbyGroove(): boolean {
+    if (this.isLobbyPlaying) {
+      this.stopLobbyGroove();
+      return false;
+    } else {
+      this.startLobbyGroove();
+      return true;
+    }
+  }
+
+  isLobbyActive(): boolean {
+    return this.isLobbyPlaying;
   }
 }
 

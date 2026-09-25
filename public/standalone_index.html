@@ -3,29 +3,462 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>QuímicaQuiz - Examen Anti-Trampas & Panel en Vivo</title>
+  <title>QuímicaQuiz - Examen Anti-Trampas, Sala de Espera Kahoot & Panel en Vivo</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- QRious QR Code Generator CDN -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+  <!-- Canvas Confetti CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     body { font-family: 'Plus Jakarta Sans', sans-serif; }
     .mono { font-family: 'JetBrains Mono', monospace; }
+    @keyframes spinSlow {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .spin-slow { animation: spinSlow 20s linear infinite; }
   </style>
 </head>
-<body class="bg-slate-900 text-slate-100 min-h-screen">
+<body class="bg-slate-900 text-slate-100 min-h-screen selection:bg-indigo-500 selection:text-white pb-12">
 
   <!-- ==========================================
-       CONFIGURACIÓN DE FIREBASE (COLOCA TUS CLAVES AQUÍ)
+       HEADER & ROL SWITCHER
+       ========================================== -->
+  <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur-md sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/30">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path></svg>
+        </div>
+        <div>
+          <h1 class="font-black text-lg tracking-tight text-white flex items-center space-x-2">
+            <span>QuímicaQuiz</span>
+            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 uppercase">Proctor v3</span>
+          </h1>
+          <p class="text-xs text-slate-400" id="headerSubtitle">Sala de Espera Kahoot & Anti-Trampas</p>
+        </div>
+      </div>
+
+      <!-- Role selector buttons -->
+      <div class="flex items-center space-x-2 bg-slate-900 p-1 rounded-2xl border border-slate-800">
+        <button id="btnRoleStudent" onclick="setRole('student')" class="px-4 py-2 rounded-xl text-xs font-black transition-all bg-indigo-600 text-white shadow-md shadow-indigo-600/30">
+          🎓 Alumno
+        </button>
+        <button id="btnRoleTeacher" onclick="setRole('teacher')" class="px-4 py-2 rounded-xl text-xs font-black transition-all text-slate-400 hover:text-white">
+          👨‍🏫 Profesor (Panel Vivo)
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ==========================================
+       VISTA DEL ALUMNO
+       ========================================== -->
+  <main id="studentSection" class="max-w-4xl mx-auto px-4 py-8">
+
+    <!-- 3... 2... 1... KAHOOT COUNTDOWN OVERLAY -->
+    <div id="countdownOverlay" class="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-xl hidden">
+      <div class="text-center animate-bounce">
+        <span class="text-xs uppercase font-black tracking-widest text-indigo-400 mb-2 block">
+          ¡El profesor ha iniciado el examen!
+        </span>
+        <div id="countdownNumberText" class="text-9xl font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500">
+          3
+        </div>
+        <p class="text-sm font-bold text-white mt-4">
+          Cargando reactivos... ¡Éxito!
+        </p>
+      </div>
+    </div>
+
+    <!-- PASO 1: FORMULARIO DE INGRESO Y REGLAS -->
+    <div id="studentRegisterArea" class="bg-slate-800/80 rounded-3xl border border-slate-700/80 p-6 sm:p-10 shadow-2xl backdrop-blur-xl">
+      <div class="text-center max-w-xl mx-auto mb-8">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-indigo-500 to-pink-500 text-white mb-4 shadow-xl">
+          <svg class="w-8 h-8 spin-slow" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M12 3a9 9 0 100 18 9 9 0 000-18z"></path></svg>
+        </div>
+        <h2 id="registerExamTitle" class="text-2xl sm:text-3xl font-black text-white">Examen de Química General</h2>
+        <p class="text-slate-400 text-xs sm:text-sm mt-2">
+          Ingresa tus credenciales para ingresar a la <strong>Sala de Espera</strong> del examen interactivo.
+        </p>
+      </div>
+
+      <form id="studentForm" onsubmit="joinWaitingRoom(event)" class="max-w-md mx-auto space-y-5">
+        <div id="registerErrorMsg" class="hidden p-3 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs font-bold"></div>
+
+        <div>
+          <label class="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-2">Nombre Completo *</label>
+          <input type="text" id="inputName" required placeholder="Ej. Sofía Martínez Ruiz" class="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-2">Código o Matrícula *</label>
+          <input type="text" id="inputMatricula" required placeholder="Ej. A01748291" class="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm mono uppercase">
+        </div>
+
+        <div class="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 space-y-2">
+          <p class="font-bold flex items-center space-x-1.5 text-amber-300">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+            <span>Supervisión Activa Anti-Trampas</span>
+          </p>
+          <p>Al cambiar de pestaña o salir del navegador se registrará una falta. <strong>A la 3ra advertencia el examen se enviará automáticamente.</strong></p>
+          <label class="flex items-center space-x-2 pt-2 border-t border-amber-500/20 cursor-pointer">
+            <input type="checkbox" id="checkTerms" required class="w-4 h-4 rounded text-indigo-600 bg-slate-900 border-slate-700">
+            <span class="text-[11px] font-semibold text-slate-300">He leído y acepto no salir de la ventana.</span>
+          </label>
+        </div>
+
+        <button type="submit" class="w-full py-3.5 px-6 rounded-xl font-black text-sm text-white bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 shadow-xl shadow-indigo-600/30 transition-all flex items-center justify-center space-x-2">
+          <span>Unirme a la Sala de Espera</span>
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+        </button>
+      </form>
+    </div>
+
+    <!-- PASO 2: SALA DE ESPERA ESTILO KAHOOT -->
+    <div id="studentWaitingArea" class="hidden space-y-6">
+      <div class="relative overflow-hidden rounded-3xl bg-gradient-to-r from-indigo-950 via-purple-950 to-pink-950 border-2 border-indigo-500/40 p-8 shadow-2xl text-center backdrop-blur-xl">
+        <div class="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 text-white shadow-xl mb-4 animate-bounce">
+          <svg class="w-10 h-10 spin-slow" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M12 3a9 9 0 100 18 9 9 0 000-18z"></path></svg>
+        </div>
+
+        <div class="inline-block px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-black uppercase tracking-wider mb-2">
+          ✓ ¡Estás en la Sala de Espera!
+        </div>
+
+        <h2 id="waitingStudentName" class="text-3xl font-black text-white">Alumno</h2>
+        <p id="waitingStudentMat" class="text-xs mono text-indigo-300 mt-1">Matrícula: A000000</p>
+
+        <div class="mt-6 max-w-lg mx-auto bg-slate-950/70 border border-slate-800 rounded-2xl p-5 text-center">
+          <div class="flex items-center justify-center space-x-2 text-indigo-300 font-bold text-sm animate-pulse">
+            <span class="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-ping"></span>
+            <span>Esperando a que el profesor inicie el examen...</span>
+          </div>
+          <p class="text-xs text-slate-400 mt-2">
+            No cierres esta pestaña. Cuando el profesor oprima <strong>"Comenzar Examen para Todos"</strong>, tu examen se activará de inmediato con el temporizador global sincronizado.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 max-w-xs mx-auto mt-6 text-xs text-slate-300">
+          <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-800">
+            Duración: <strong id="waitingDurationText" class="text-white">20 min</strong>
+          </div>
+          <div class="bg-slate-900/80 p-3 rounded-xl border border-slate-800">
+            Formados: <strong id="waitingPeersCountText" class="text-white">1 alumnos</strong>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lista de compañeros en la sala -->
+      <div class="bg-slate-800/80 rounded-3xl border border-slate-700/80 p-6 shadow-xl">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-xs font-black text-white uppercase tracking-wider">Compañeros en Sala</h3>
+          <span class="text-[11px] text-emerald-400 font-bold flex items-center space-x-1">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block"></span>
+            <span>En vivo</span>
+          </span>
+        </div>
+        <div id="waitingPeersGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-h-48 overflow-y-auto"></div>
+      </div>
+
+      <div class="text-center">
+        <button type="button" onclick="exitWaitingRoom()" class="text-xs text-slate-500 hover:text-slate-300 underline">
+          Salir de la sala
+        </button>
+      </div>
+    </div>
+
+    <!-- PASO 3: EXAMEN ACTIVO EN CURSO -->
+    <div id="examActiveArea" class="hidden space-y-6">
+      <!-- Proctor bar -->
+      <div class="bg-slate-800/90 rounded-2xl border border-slate-700 p-4 shadow-xl flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h3 id="examStudentName" class="font-black text-white text-base">Alumno</h3>
+          <p id="examStudentMat" class="text-xs mono text-indigo-300">A000000</p>
+        </div>
+
+        <div class="flex items-center space-x-3">
+          <div id="examWarnBadge" class="px-3 py-1 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+            Faltas: 0 / 3
+          </div>
+          <div class="px-4 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-xs font-mono font-bold flex items-center space-x-2 text-white">
+            <svg class="w-4 h-4 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <span id="examTimerText">20:00</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Question Card Container -->
+      <div id="questionCardWrapper" class="bg-slate-800/80 rounded-3xl border border-slate-700 p-6 sm:p-8 shadow-2xl">
+        <div class="flex items-center justify-between text-xs text-slate-400 mb-4 pb-3 border-b border-slate-700/60">
+          <span id="qCounter">Pregunta 1 de 4</span>
+          <span id="qTypeBadge" class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">Opción Múltiple</span>
+        </div>
+
+        <div id="qImageContainer" class="hidden mb-5">
+          <img id="qImage" src="" alt="Ilustración de la pregunta" class="max-h-64 rounded-2xl border border-slate-700 object-cover mx-auto shadow-lg">
+        </div>
+
+        <h3 id="qTitle" class="text-lg sm:text-xl font-bold text-white mb-6 leading-relaxed"></h3>
+
+        <!-- Opciones de respuesta dinámicas según el tipo -->
+        <div id="qDynamicContentArea"></div>
+
+        <div class="flex items-center justify-between mt-8 pt-6 border-t border-slate-700/60">
+          <button id="btnPrev" type="button" onclick="prevQuestion()" class="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white bg-slate-900 border border-slate-700 disabled:opacity-30 disabled:cursor-not-allowed">
+            ← Anterior
+          </button>
+          <button id="btnNext" type="button" onclick="nextQuestion()" class="px-6 py-2.5 rounded-xl text-xs font-black text-white bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/30">
+            Siguiente →
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PASO 4: RESULTADOS FINALES & RETROALIMENTACIÓN -->
+    <div id="resultsArea" class="hidden space-y-6">
+      <div class="bg-slate-800/90 rounded-3xl border border-slate-700 p-8 text-center shadow-2xl">
+        <div class="w-16 h-16 mx-auto rounded-3xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center mb-4">
+          <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"></path></svg>
+        </div>
+        <h2 class="text-3xl font-black text-white">¡Examen Entregado!</h2>
+        <p class="text-xs text-slate-400 mt-1">Tu evaluación ha sido sincronizada con el panel del docente.</p>
+
+        <div class="mt-6 inline-block bg-slate-900 border border-slate-700 px-6 py-4 rounded-2xl">
+          <span class="text-xs text-slate-400 uppercase font-bold tracking-wider">Calificación Final</span>
+          <div id="finalScoreText" class="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-300 mt-1">
+            0 / 100
+          </div>
+        </div>
+
+        <div class="mt-8 text-left space-y-4 max-w-2xl mx-auto" id="resultsFeedbackList"></div>
+
+        <div class="mt-8 pt-6 border-t border-slate-700">
+          <button type="button" onclick="location.reload()" class="px-6 py-2.5 rounded-xl text-xs font-bold bg-slate-900 border border-slate-700 hover:bg-slate-800 text-white">
+            Volver al inicio
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ==========================================
+       VISTA DEL PROFESOR (PANEL EN VIVO)
+       ========================================== -->
+  <main id="teacherSection" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 hidden">
+
+    <!-- 1. CONTROL DE SALA DE ESPERA KAHOOT & TEMPORIZADOR GLOBAL -->
+    <div class="relative overflow-hidden rounded-3xl bg-gradient-to-r from-indigo-950/90 via-purple-950/90 to-slate-900/90 border-2 border-indigo-500/40 p-6 shadow-2xl backdrop-blur-xl">
+      <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+        <div class="space-y-2">
+          <div class="flex items-center space-x-2">
+            <span id="teacherSessionBadge" class="px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center space-x-1.5">
+              <span id="sessionPingDot" class="w-2 h-2 rounded-full bg-indigo-400"></span>
+              <span id="sessionStatusLabel">Sala de Espera Kahoot (Abierta)</span>
+            </span>
+            <span id="teacherWaitingCountBadge" class="text-xs text-slate-400 font-mono">0 alumno(s) formado(s)</span>
+          </div>
+
+          <h2 class="text-2xl sm:text-3xl font-black text-white tracking-tight">
+            Control de Inicio & Temporizador Sincronizado
+          </h2>
+          <p class="text-xs sm:text-sm text-slate-300 max-w-2xl">
+            Los alumnos esperan en la sala. Al hacer clic en <strong>"Comenzar Examen para Todos"</strong>, todos los dispositivos inician la prueba con el temporizador al unísono.
+          </p>
+        </div>
+
+        <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+          <div id="teacherSetupControls" class="flex items-center gap-3">
+            <div class="bg-slate-900/90 border border-slate-700 rounded-2xl p-2.5 flex items-center space-x-2">
+              <svg class="w-5 h-5 text-pink-400 shrink-0 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+              <div class="flex flex-col">
+                <span class="text-[10px] uppercase font-bold text-slate-400">Tiempo de Prueba</span>
+                <div class="flex items-center space-x-1.5">
+                  <input type="number" id="inputDurationMin" min="1" max="180" value="20" class="w-16 bg-slate-800 border border-slate-600 rounded-lg px-2 py-0.5 text-center text-sm font-bold text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 mono">
+                  <span class="text-xs text-slate-300 font-bold">min</span>
+                </div>
+              </div>
+            </div>
+
+            <button type="button" onclick="startExamForEveryone()" class="px-6 py-3.5 rounded-2xl font-black text-sm text-white bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600 hover:from-emerald-400 hover:to-indigo-500 shadow-xl shadow-emerald-500/25 transition-all flex items-center justify-center space-x-2">
+              <svg class="w-5 h-5 fill-white" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              <span>Comenzar Examen para Todos</span>
+            </button>
+          </div>
+
+          <div id="teacherActiveControls" class="hidden items-center gap-3">
+            <div class="bg-slate-900 border-2 border-indigo-500/50 rounded-2xl px-5 py-2.5 flex items-center space-x-3 text-white shadow-inner">
+              <svg class="w-5 h-5 text-pink-400 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+              <div>
+                <span class="text-[10px] text-slate-400 uppercase font-bold block">Tiempo Restante</span>
+                <span id="teacherRemainingTimer" class="text-xl mono font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-indigo-300">20:00</span>
+              </div>
+            </div>
+
+            <button type="button" onclick="resetToWaitingRoom()" class="px-4 py-3 rounded-2xl font-bold text-xs text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-all flex items-center space-x-2">
+              <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+              <span>Pausar / Volver a Sala</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Roster of Formed Students -->
+      <div class="mt-5 pt-4 border-t border-indigo-500/20">
+        <span class="text-xs font-black uppercase tracking-wider text-indigo-300 block mb-2">
+          Alumnos Formados en la Sala (<span id="waitingCountNum">0</span>)
+        </span>
+        <div id="teacherWaitingGrid" class="flex flex-wrap gap-2 text-xs text-slate-400">
+          Ningún alumno formado en este momento. Muestra el Código QR para que ingresen.
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. EXAM METADATA, CARGA TEXTO PLANO & QR -->
+    <div class="bg-gradient-to-br from-slate-800/90 to-slate-900 rounded-3xl border border-slate-700/80 p-6 shadow-xl backdrop-blur-md flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+      <div>
+        <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+          Examen Sincronizado
+        </span>
+        <h3 id="examMainTitle" class="text-2xl font-black text-white mt-1">Examen de Química General</h3>
+        <p class="text-xs text-slate-400 mt-0.5" id="examMetaSubtitle">4 preguntas activas (100 puntos)</p>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-3">
+        <button type="button" onclick="openExamLoader()" class="px-4 py-2.5 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 shadow-md flex items-center space-x-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+          <span>Cargar Examen (Texto Plano)</span>
+        </button>
+
+        <button type="button" onclick="showQRCodeModal()" class="px-4 py-2.5 rounded-xl font-bold text-xs text-slate-100 bg-slate-800 hover:bg-slate-700 border border-slate-700 flex items-center space-x-2">
+          <svg class="w-4 h-4 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"></path></svg>
+          <span>Código QR</span>
+        </button>
+
+        <button type="button" onclick="confirmClearDatabase()" class="px-3.5 py-2.5 rounded-xl font-bold text-xs text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 flex items-center space-x-1.5">
+          <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.03 8.03 0 01-15.357-2m15.357 2H15"></path></svg>
+          <span>Limpiar / Nuevo Grupo</span>
+        </button>
+
+        <button type="button" onclick="exportToCSV()" class="px-3.5 py-2.5 rounded-xl font-bold text-xs text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 flex items-center space-x-1.5">
+          <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+          <span>Exportar CSV</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 3. TABLA DE ALUMNOS EN TIEMPO REAL -->
+    <div class="bg-slate-800/80 rounded-3xl border border-slate-700/80 shadow-2xl overflow-hidden">
+      <div class="p-5 border-b border-slate-700 flex flex-wrap items-center justify-between gap-4">
+        <h3 class="text-sm font-black text-white uppercase tracking-wider flex items-center space-x-2">
+          <span>Supervisión en Vivo de Alumnos</span>
+          <span id="tableTotalStudents" class="px-2 py-0.5 rounded-full text-xs bg-slate-900 text-indigo-400 border border-slate-800 font-mono">0</span>
+        </h3>
+        <button type="button" onclick="seedDemoStudents()" class="text-xs text-indigo-400 hover:text-indigo-300 font-bold underline">
+          + Generar alumnos de prueba
+        </button>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+          <thead>
+            <tr class="border-b border-slate-700/80 bg-slate-900/50 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+              <th class="py-3 px-6">Alumno / Matrícula</th>
+              <th class="py-3 px-4">Estado</th>
+              <th class="py-3 px-4">Progreso</th>
+              <th class="py-3 px-4">Calificación</th>
+              <th class="py-3 px-4">Faltas Anti-Trampas</th>
+              <th class="py-3 px-6 text-right">Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="teacherTableBody" class="divide-y divide-slate-700/60 text-xs">
+            <tr>
+              <td colspan="6" class="py-12 text-center text-slate-500">
+                Ningún alumno conectado aún. Escanea el código QR o comparte el link del examen.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <!-- MODAL: CARGA DE EXÁMENES DESDE TEXTO PLANO -->
+  <div id="examLoaderModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm hidden">
+    <div class="max-w-3xl w-full bg-slate-900 border border-slate-700 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div class="p-6 border-b border-slate-800 flex items-center justify-between">
+        <h3 class="font-black text-lg text-white">Cargar Examen desde Texto Plano</h3>
+        <button type="button" onclick="closeExamLoader()" class="text-slate-400 hover:text-white">✕</button>
+      </div>
+      <div class="p-6 overflow-y-auto space-y-4">
+        <p class="text-xs text-slate-400">
+          Pega tus preguntas de opción múltiple, abiertas o de relacionar con soporte para imágenes:
+        </p>
+        <div class="flex items-center space-x-3">
+          <input type="text" id="inputExamTitle" placeholder="Título del Examen..." class="flex-1 px-4 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs font-bold">
+          <button type="button" onclick="loadTemplateSample()" class="px-3 py-2 rounded-xl text-xs font-bold text-indigo-400 bg-indigo-500/10 border border-indigo-500/30 hover:bg-indigo-500/20 shrink-0">
+            Cargar Ejemplo
+          </button>
+        </div>
+        <textarea id="plainTextInput" rows="12" class="w-full p-4 rounded-2xl bg-slate-950 border border-slate-700 text-white mono text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="-- TIPO: OPCION_MULTIPLE --&#10;PREGUNTA: ¿Cuál es el símbolo del Oro?&#10;IMAGEN: https://images.unsplash.com/photo-1610375461246-83df859d849d?w=800&#10;A) Ag&#10;B) Au&#10;C) Fe&#10;D) Cu&#10;CORRECTA: B&#10;RETROALIMENTACION: Au proviene del latín aurum."></textarea>
+      </div>
+      <div class="p-4 border-t border-slate-800 flex items-center justify-end space-x-3 bg-slate-950">
+        <button type="button" onclick="closeExamLoader()" class="px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:text-white">Cancelar</button>
+        <button type="button" onclick="loadPlainTextExam()" class="px-6 py-2.5 rounded-xl text-xs font-black text-white bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/30">
+          Publicar y Sincronizar Examen
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: CÓDIGO QR -->
+  <div id="qrModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm hidden">
+    <div class="max-w-sm w-full bg-slate-900 border border-slate-700 rounded-3xl p-6 shadow-2xl text-center space-y-4">
+      <h3 class="font-black text-lg text-white">Acceso al Examen</h3>
+      <p class="text-xs text-slate-400">Escanea con tu celular para ingresar directamente a la sala de espera:</p>
+      <div class="bg-white p-4 rounded-2xl inline-block shadow-inner">
+        <canvas id="qrCanvas" class="w-48 h-48 mx-auto"></canvas>
+      </div>
+      <p id="qrUrlText" class="text-[11px] mono text-indigo-300 break-all bg-slate-950 p-2.5 rounded-xl border border-slate-800"></p>
+      <div class="flex items-center justify-center space-x-2 pt-2">
+        <button type="button" onclick="copyStudentUrl()" class="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-500">Copiar Link</button>
+        <button type="button" onclick="closeQRCodeModal()" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-300 hover:text-white">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: ADVERTENCIA ANTI-TRAMPAS -->
+  <div id="warningModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md hidden animate-in fade-in">
+    <div class="max-w-md w-full bg-slate-900 border-2 border-rose-500 rounded-3xl p-6 shadow-2xl text-center space-y-4">
+      <div class="w-16 h-16 mx-auto rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center">
+        <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+      </div>
+      <h3 class="text-xl font-black text-white">¡ADVERTENCIA ANTI-TRAMPAS!</h3>
+      <p class="text-xs text-slate-300">
+        Se detectó que saliste de la pestaña o minimizaste el examen. Esta acción quedó registrada con marca de tiempo en el servidor.
+      </p>
+      <div class="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-bold">
+        Falta acumulada: <span id="warnCountText" class="text-white underline">1 de 3</span>
+      </div>
+      <button type="button" onclick="closeWarningModal()" class="w-full py-3 rounded-xl font-black text-xs text-white bg-rose-600 hover:bg-rose-500 shadow-lg shadow-rose-600/30">
+        Entendido, continuar examen
+      </button>
+    </div>
+  </div>
+
+  <!-- ==========================================
+       JAVASCRIPT MODULAR Y FIREBASE CDN V10
        ========================================== -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
     import { getDatabase, ref, set, onValue, remove } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
-    // Reemplaza con tus credenciales de Firebase Console:
+    // INSTRUCCIONES FIREBASE:
+    // Pega tus credenciales de Firebase Console (Proyecto con Realtime Database):
     const firebaseConfig = {
       apiKey: "AIzaSyYOUR_API_KEY_HERE",
       authDomain: "tu-proyecto.firebaseapp.com",
@@ -47,66 +480,152 @@
       console.warn("Modo local activo:", e);
     }
 
+    // Audio Synthesizer (Alarms & Sounds)
+    class SoundFX {
+      constructor() {
+        this.ctx = null;
+      }
+      getCtx() {
+        if (!this.ctx && typeof AudioContext !== 'undefined') {
+          this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        return this.ctx;
+      }
+      playWarning() {
+        const ctx = this.getCtx();
+        if (!ctx) return;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
+        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.4);
+      }
+      playCritical() {
+        const ctx = this.getCtx();
+        if (!ctx) return;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(900, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(200, ctx.currentTime + 0.6);
+        gain.gain.setValueAtTime(0.4, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.6);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.6);
+      }
+      playSuccess() {
+        const ctx = this.getCtx();
+        if (!ctx) return;
+        const now = ctx.currentTime;
+        [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+          gain.gain.setValueAtTime(0.2, now + idx * 0.08);
+          gain.gain.exponentialRampToValueAtTime(0.01, now + idx * 0.08 + 0.3);
+          osc.start(now + idx * 0.08);
+          osc.stop(now + idx * 0.08 + 0.3);
+        });
+      }
+    }
+    const sound = new SoundFX();
+
+    // Default Questions with types & images
     let activeQuestions = [
       {
         id: "q1",
-        question: "¿Qué tipo de enlace se forma entre un metal y un no metal por transferencia de electrones?",
-        options: ["Covalente Polar", "Iónico (Electrovalente)", "Metálico", "Covalente Apolar"],
+        type: "opcion_multiple",
+        question: "¿Qué tipo de enlace químico se forma entre un metal y un no metal por transferencia de electrones?",
+        imageUrl: "https://images.unsplash.com/photo-1532187863486-abf9dbad1b69?w=800&auto=format&fit=crop&q=80",
+        options: ["Enlace Covalente Polar", "Enlace Iónico (Electrovalente)", "Enlace Metálico", "Enlace Covalente Apolar"],
         correct: 1,
-        explanation: "El enlace iónico resulta de la transferencia electrónica debido a la alta diferencia de electronegatividad.",
+        explanation: "El enlace iónico resulta de la atracción electrostática por transferencia completa de electrones.",
         points: 25
       },
       {
         id: "q2",
-        question: "De acuerdo con Lavoisier, ¿cuáles coeficientes balancean: _ C3H8 + _ O2 -> _ CO2 + _ H2O?",
-        options: ["1, 5, 3, 4", "1, 3, 3, 4", "2, 7, 6, 8", "1, 10, 3, 8"],
-        correct: 0,
-        explanation: "1 C3H8 + 5 O2 produce 3 CO2 + 4 H2O (conservación exacta de átomos en reactivos y productos).",
+        type: "relacionar",
+        question: "Relaciona cada sustancia química con su clasificación:",
+        imageUrl: "https://images.unsplash.com/photo-1603126857599-f6e157fa2fe6?w=800&auto=format&fit=crop&q=80",
+        pairs: [
+          { id: "p1", left: "NaCl", right: "Sal binaria iónica" },
+          { id: "p2", left: "H2SO4", right: "Ácido oxácido" },
+          { id: "p3", left: "He", right: "Gas noble inerte" },
+          { id: "p4", left: "NaOH", right: "Base o hidróxido" }
+        ],
+        explanation: "NaCl es sal neutra, H2SO4 ácido fuerte, He gas noble y NaOH hidróxido alcalino.",
         points: 25
       },
       {
         id: "q3",
-        question: "Si una solución acuosa tiene [H3O+] = 1 x 10^-3 M a 25°C, ¿cuál es su pH y cómo se clasifica?",
-        options: ["pH = 11 (Básica)", "pH = 3 (Ácida)", "pH = 7 (Neutra)", "pH = -3 (Anfótera)"],
-        correct: 1,
-        explanation: "pH = -log(10^-3) = 3. Al ser menor a 7 a 25°C, se clasifica como solución ácida.",
+        type: "abierta",
+        question: "Explica brevemente el principio de conservación de la materia formulado por Lavoisier y por qué es fundamental al balancear ecuaciones químicas.",
+        imageUrl: "https://images.unsplash.com/photo-1507668077129-56e32842fceb?w=800&auto=format&fit=crop&q=80",
+        reference: "La materia no se crea ni se destruye, solo se transforma. El número total de átomos de cada elemento debe ser igual en reactivos y productos.",
+        explanation: "En toda reacción química ordinaria, la masa total permanece invariable.",
         points: 25
       },
       {
         id: "q4",
-        question: "¿Cuántos protones y cuántos neutrones contiene el núcleo del carbono-14 (14_6 C)?",
-        options: ["6 protones y 6 neutrones", "8 protones y 6 neutrones", "6 protones y 8 neutrones", "14 protones y 0 neutrones"],
-        correct: 2,
-        explanation: "El carbono tiene Z=6 protones. Los neutrones son N = A - Z = 14 - 6 = 8 neutrones.",
+        type: "opcion_multiple",
+        question: "Si una solución acuosa a 25°C tiene [H3O+] = 1 x 10^-3 M, ¿cuál es su pH?",
+        imageUrl: "https://images.unsplash.com/photo-1517048676732-d65bc937f952?w=800&auto=format&fit=crop&q=80",
+        options: ["pH = 11 (Básica)", "pH = 3 (Ácida)", "pH = 7 (Neutra)", "pH = -3 (Anfótera)"],
+        correct: 1,
+        explanation: "pH = -log(10^-3) = 3 (menor a 7 es ácida).",
         points: 25
       }
     ];
 
     let examTitle = "Examen de Química General";
+    let globalSession = {
+      status: 'waiting_room', // 'waiting_room' | 'active'
+      durationMinutes: 20,
+      startedAt: null,
+      endsAt: null
+    };
+
+    let studentsDB = {};
     let currentStudent = {
       fullName: '',
       matricula: '',
       answers: {},
       warnings: 0,
       cheatLogs: [],
-      status: 'not_started',
+      status: 'not_started', // 'waiting' | 'in_progress' | 'submitted' | 'forced_submission_cheat'
       score: 0
     };
     let currentQIdx = 0;
-    let studentsDB = {};
+    let matchingSelectedLeft = null;
 
-    const channel = new BroadcastChannel('quimica_live_channel_v2');
+    // Local BroadcastChannel for instant multi-tab testing
+    const channel = new BroadcastChannel('quimica_live_proctor_channel');
     channel.onmessage = (e) => {
       if (e.data?.student) {
         studentsDB[e.data.student.matricula] = e.data.student;
         renderTeacherTable();
+        renderWaitingPeers();
       } else if (e.data?.type === 'CLEAR_STUDENTS') {
         studentsDB = {};
         renderTeacherTable();
-      } else if (e.data?.type === 'NEW_EXAM') {
+        renderWaitingPeers();
+      } else if (e.data?.type === 'SESSION_UPDATE') {
+        globalSession = e.data.session;
+        handleSessionUpdate();
+      } else if (e.data?.type === 'EXAM_UPDATE') {
         activeQuestions = e.data.questions;
         examTitle = e.data.title;
         document.getElementById('examMainTitle').innerText = examTitle;
+        document.getElementById('registerExamTitle').innerText = examTitle;
         if (currentStudent.status === 'in_progress') renderQuestion();
       }
     };
@@ -119,11 +638,28 @@
       }
     }
 
+    function syncSession(session) {
+      globalSession = session;
+      channel.postMessage({ type: 'SESSION_UPDATE', session });
+      if (db) {
+        set(ref(db, 'exams/quimica/global_session'), session);
+      }
+      handleSessionUpdate();
+    }
+
     if (db) {
       onValue(ref(db, 'exams/quimica/students'), (snapshot) => {
-        const val = snapshot.val();
-        studentsDB = val || {};
+        studentsDB = snapshot.val() || {};
         renderTeacherTable();
+        renderWaitingPeers();
+      });
+
+      onValue(ref(db, 'exams/quimica/global_session'), (snapshot) => {
+        const val = snapshot.val();
+        if (val) {
+          globalSession = val;
+          handleSessionUpdate();
+        }
       });
 
       onValue(ref(db, 'exams/quimica/active_exam'), (snapshot) => {
@@ -132,32 +668,617 @@
           activeQuestions = val.questions;
           examTitle = val.title || examTitle;
           document.getElementById('examMainTitle').innerText = examTitle;
+          document.getElementById('registerExamTitle').innerText = examTitle;
           if (currentStudent.status === 'in_progress') renderQuestion();
         }
       });
     }
 
-    // 1. CARGA DE EXÁMENES DESDE TEXTO PLANO
-    window.loadPlainTextExam = function() {
-      const text = document.getElementById('plainTextInput').value.trim();
-      if (!text) return alert("Por favor pega el texto de las preguntas.");
+    // Role Switch
+    window.setRole = function(role) {
+      document.getElementById('studentSection').classList.toggle('hidden', role !== 'student');
+      document.getElementById('teacherSection').classList.toggle('hidden', role !== 'teacher');
+      document.getElementById('btnRoleStudent').className = role === 'student' ? 'px-4 py-2 rounded-xl text-xs font-black transition-all bg-indigo-600 text-white shadow-md shadow-indigo-600/30' : 'px-4 py-2 rounded-xl text-xs font-black transition-all text-slate-400 hover:text-white';
+      document.getElementById('btnRoleTeacher').className = role === 'teacher' ? 'px-4 py-2 rounded-xl text-xs font-black transition-all bg-purple-600 text-white shadow-md shadow-purple-600/30' : 'px-4 py-2 rounded-xl text-xs font-black transition-all text-slate-400 hover:text-white';
+      if (role === 'teacher') renderTeacherTable();
+    };
 
-      const blocks = text.split(/(?=^PREGUNTA\s*:)/gmi).map(b => b.trim()).filter(Boolean);
-      if (blocks.length === 0) {
-        return alert("No se detectó el formato correcto. Asegúrate de que cada reactivo comience con PREGUNTA:");
+    // 1. Join Waiting Room (Student)
+    window.joinWaitingRoom = function(e) {
+      e.preventDefault();
+      const name = document.getElementById('inputName').value.trim();
+      const mat = document.getElementById('inputMatricula').value.trim().toUpperCase();
+      const terms = document.getElementById('checkTerms').checked;
+      const err = document.getElementById('registerErrorMsg');
+
+      if (!name || !mat) {
+        err.innerText = "Por favor completa tu nombre y matrícula.";
+        err.classList.remove('hidden');
+        return;
+      }
+      if (!terms) {
+        err.innerText = "Debes aceptar las normas anti-trampas.";
+        err.classList.remove('hidden');
+        return;
       }
 
+      currentStudent.fullName = name;
+      currentStudent.matricula = mat;
+      currentStudent.status = 'waiting';
+      currentStudent.answers = {};
+      currentStudent.warnings = 0;
+      currentStudent.cheatLogs = [];
+      syncStudent(currentStudent);
+
+      document.getElementById('waitingStudentName').innerText = name;
+      document.getElementById('waitingStudentMat').innerText = "Matrícula: " + mat;
+      document.getElementById('waitingDurationText').innerText = (globalSession.durationMinutes || 20) + " min";
+
+      document.getElementById('studentRegisterArea').classList.add('hidden');
+      document.getElementById('studentWaitingArea').classList.remove('hidden');
+      renderWaitingPeers();
+
+      // If session is already active, launch countdown
+      if (globalSession.status === 'active') {
+        launchStudentCountdown();
+      }
+    };
+
+    window.exitWaitingRoom = function() {
+      if (currentStudent.matricula) {
+        delete studentsDB[currentStudent.matricula];
+        if (db) remove(ref(db, 'exams/quimica/students/' + currentStudent.matricula));
+        channel.postMessage({ type: 'CLEAR_STUDENTS' });
+      }
+      currentStudent.status = 'not_started';
+      document.getElementById('studentWaitingArea').classList.add('hidden');
+      document.getElementById('studentRegisterArea').classList.remove('hidden');
+    };
+
+    function renderWaitingPeers() {
+      const peers = Object.values(studentsDB).filter(s => s.status === 'waiting');
+      const container = document.getElementById('waitingPeersGrid');
+      const teacherGrid = document.getElementById('teacherWaitingGrid');
+      const badge = document.getElementById('teacherWaitingCountBadge');
+      const numSpan = document.getElementById('waitingCountNum');
+      const studentCountText = document.getElementById('waitingPeersCountText');
+
+      if (studentCountText) studentCountText.innerText = peers.length + " alumnos";
+      if (badge) badge.innerText = peers.length + " alumno(s) formado(s)";
+      if (numSpan) numSpan.innerText = peers.length;
+
+      if (container) {
+        container.innerHTML = peers.map(p => `
+          <div class="p-2.5 rounded-xl border ${p.matricula === currentStudent.matricula ? 'bg-indigo-600/30 border-indigo-500 font-bold text-white' : 'bg-slate-900/60 border-slate-800 text-slate-300'} flex items-center space-x-2">
+            <div class="w-6 h-6 rounded-lg bg-indigo-600 text-white text-xs font-bold flex items-center justify-center">${p.fullName.charAt(0)}</div>
+            <div class="truncate text-xs"><p class="truncate">${p.fullName}</p></div>
+          </div>
+        `).join('') || '<p class="text-xs text-slate-500 col-span-2">Esperando a que más compañeros se unan...</p>';
+      }
+
+      if (teacherGrid) {
+        if (peers.length === 0) {
+          teacherGrid.innerHTML = 'Ningún alumno formado en este momento. Muestra el Código QR para que ingresen.';
+        } else {
+          teacherGrid.innerHTML = peers.map(p => `
+            <div class="bg-indigo-950/70 border border-indigo-500/40 rounded-xl px-3 py-1.5 flex items-center space-x-2 text-white">
+              <span class="w-5 h-5 rounded-lg bg-indigo-600 text-[10px] font-bold flex items-center justify-center">${p.fullName.charAt(0)}</span>
+              <span class="font-semibold">${p.fullName}</span>
+              <span class="text-indigo-300 font-mono text-[10px]">(${p.matricula})</span>
+            </div>
+          `).join('');
+        }
+      }
+    }
+
+    // Teacher Starts Exam for Everyone
+    window.startExamForEveryone = function() {
+      const dur = parseInt(document.getElementById('inputDurationMin').value) || 20;
+      const now = Date.now();
+      const endsAt = now + dur * 60 * 1000;
+
+      // Transition waiting students
+      Object.values(studentsDB).forEach(s => {
+        if (s.status === 'waiting') {
+          s.status = 'in_progress';
+          s.startedAt = now;
+          syncStudent(s);
+        }
+      });
+
+      syncSession({
+        status: 'active',
+        durationMinutes: dur,
+        startedAt: now,
+        endsAt: endsAt
+      });
+    };
+
+    window.resetToWaitingRoom = function() {
+      syncSession({
+        status: 'waiting_room',
+        durationMinutes: globalSession.durationMinutes || 20,
+        startedAt: null,
+        endsAt: null
+      });
+    };
+
+    function handleSessionUpdate() {
+      const isAct = globalSession.status === 'active';
+      document.getElementById('teacherSetupControls').classList.toggle('hidden', isAct);
+      document.getElementById('teacherActiveControls').classList.toggle('hidden', !isAct);
+      document.getElementById('teacherActiveControls').classList.toggle('flex', isAct);
+
+      const badge = document.getElementById('teacherSessionBadge');
+      const dot = document.getElementById('sessionPingDot');
+      const label = document.getElementById('sessionStatusLabel');
+
+      if (isAct) {
+        badge.className = "px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center space-x-1.5 animate-pulse";
+        dot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-ping";
+        label.innerText = "Examen en Vivo (Cronómetro Corriendo)";
+      } else {
+        badge.className = "px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center space-x-1.5";
+        dot.className = "w-2 h-2 rounded-full bg-indigo-400";
+        label.innerText = "Sala de Espera Kahoot (Abierta)";
+      }
+
+      // Check student side
+      if (currentStudent.status === 'waiting' && isAct) {
+        launchStudentCountdown();
+      }
+    }
+
+    function launchStudentCountdown() {
+      const overlay = document.getElementById('countdownOverlay');
+      const num = document.getElementById('countdownNumberText');
+      overlay.classList.remove('hidden');
+
+      let count = 3;
+      num.innerText = count;
+      const intv = setInterval(() => {
+        count--;
+        if (count > 0) {
+          num.innerText = count;
+        } else {
+          clearInterval(intv);
+          overlay.classList.add('hidden');
+          sound.playSuccess();
+          currentStudent.status = 'in_progress';
+          syncStudent(currentStudent);
+
+          document.getElementById('studentWaitingArea').classList.add('hidden');
+          document.getElementById('examActiveArea').classList.remove('hidden');
+          renderQuestion();
+          updateExamHeader();
+        }
+      }, 1000);
+    }
+
+    // Global Timer Clock
+    setInterval(() => {
+      if (globalSession.status === 'active' && globalSession.endsAt) {
+        const remaining = Math.max(0, Math.floor((globalSession.endsAt - Date.now()) / 1000));
+        const mins = Math.floor(remaining / 60);
+        const secs = remaining % 60;
+        const fmt = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+
+        const teacherTimer = document.getElementById('teacherRemainingTimer');
+        if (teacherTimer) teacherTimer.innerText = fmt;
+
+        const studentTimer = document.getElementById('examTimerText');
+        if (studentTimer) studentTimer.innerText = fmt;
+
+        if (remaining <= 0 && currentStudent.status === 'in_progress') {
+          submitExam();
+        }
+      }
+    }, 1000);
+
+    // ANTI-TRAMPAS: visibilitychange & blur
+    document.addEventListener("visibilitychange", () => {
+      if (currentStudent.status === 'in_progress' && (document.hidden || document.visibilityState === 'hidden')) {
+        handleViolation("Cambio de pestaña o minimizado detectado");
+      }
+    });
+
+    window.addEventListener("blur", () => {
+      if (currentStudent.status === 'in_progress') {
+        handleViolation("Ventana desenfocada o cambio de aplicación");
+      }
+    });
+
+    function handleViolation(reason) {
+      currentStudent.warnings++;
+      currentStudent.cheatLogs.push({
+        time: new Date().toLocaleTimeString(),
+        reason: reason,
+        warningNumber: currentStudent.warnings
+      });
+
+      syncStudent(currentStudent);
+
+      if (currentStudent.warnings >= 3) {
+        sound.playCritical();
+        currentStudent.status = 'forced_submission_cheat';
+        syncStudent(currentStudent);
+        document.getElementById('warningModal').classList.add('hidden');
+        alert("🚨 Has acumulado 3 advertencias por salir del examen. Tu prueba ha sido enviada automáticamente.");
+        submitExam();
+      } else {
+        sound.playWarning();
+        document.getElementById('warnCountText').innerText = currentStudent.warnings + " de 3";
+        document.getElementById('warningModal').classList.remove('hidden');
+      }
+      updateExamHeader();
+    }
+
+    window.closeWarningModal = function() {
+      document.getElementById('warningModal').classList.add('hidden');
+      updateExamHeader();
+    };
+
+    function updateExamHeader() {
+      document.getElementById('examStudentName').innerText = currentStudent.fullName;
+      document.getElementById('examStudentMat').innerText = currentStudent.matricula;
+      const b = document.getElementById('examWarnBadge');
+      b.innerText = "Faltas: " + currentStudent.warnings + " / 3";
+      if (currentStudent.warnings === 0) {
+        b.className = "px-3 py-1 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+      } else if (currentStudent.warnings === 1) {
+        b.className = "px-3 py-1 rounded-xl text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30";
+      } else {
+        b.className = "px-3 py-1 rounded-xl text-xs font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30 animate-pulse";
+      }
+    }
+
+    // Render Question by Type
+    function renderQuestion() {
+      const q = activeQuestions[currentQIdx] || activeQuestions[0];
+      if (!q) return;
+
+      document.getElementById('qCounter').innerText = `Pregunta ${currentQIdx + 1} de ${activeQuestions.length}`;
+      document.getElementById('qTitle').innerText = `${currentQIdx + 1}. ${q.question}`;
+
+      // Type Badge
+      const typeBadge = document.getElementById('qTypeBadge');
+      if (q.type === 'relacionar') {
+        typeBadge.innerText = 'Relacionar Columnas';
+        typeBadge.className = 'px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-pink-500/20 text-pink-400 border border-pink-500/30';
+      } else if (q.type === 'abierta') {
+        typeBadge.innerText = 'Pregunta Abierta';
+        typeBadge.className = 'px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-purple-500/20 text-purple-400 border border-purple-500/30';
+      } else {
+        typeBadge.innerText = 'Opción Múltiple';
+        typeBadge.className = 'px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-indigo-500/20 text-indigo-400 border border-indigo-500/30';
+      }
+
+      // Image
+      const imgBox = document.getElementById('qImageContainer');
+      const img = document.getElementById('qImage');
+      if (q.imageUrl) {
+        img.src = q.imageUrl;
+        imgBox.classList.remove('hidden');
+      } else {
+        imgBox.classList.add('hidden');
+      }
+
+      const area = document.getElementById('qDynamicContentArea');
+      area.innerHTML = '';
+
+      if (q.type === 'opcion_multiple') {
+        const grid = document.createElement('div');
+        grid.className = 'grid grid-cols-1 gap-3';
+        (q.options || []).forEach((opt, idx) => {
+          const isSelected = currentStudent.answers[q.id] === idx;
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = `w-full text-left p-4 rounded-2xl border transition-all flex items-center space-x-3.5 ${
+            isSelected ? 'bg-indigo-600/30 border-indigo-500 text-white font-bold ring-2 ring-indigo-500/40' : 'bg-slate-900/80 border-slate-700 text-slate-300 hover:bg-slate-900'
+          }`;
+          btn.innerHTML = `
+            <span class="w-7 h-7 rounded-xl flex items-center justify-center font-bold text-xs font-mono shrink-0 ${isSelected ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-indigo-300'}">${String.fromCharCode(65+idx)}</span>
+            <span>${opt}</span>
+          `;
+          btn.onclick = () => {
+            currentStudent.answers[q.id] = idx;
+            syncStudent(currentStudent);
+            renderQuestion();
+          };
+          grid.appendChild(btn);
+        });
+        area.appendChild(grid);
+      } else if (q.type === 'abierta') {
+        const textWrapper = document.createElement('div');
+        textWrapper.className = 'space-y-3';
+        const textarea = document.createElement('textarea');
+        textarea.rows = 5;
+        textarea.className = 'w-full p-4 rounded-2xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 leading-relaxed';
+        textarea.placeholder = 'Escribe tu respuesta con fundamentación...';
+        textarea.value = currentStudent.answers[q.id] || '';
+        textarea.oninput = (e) => {
+          currentStudent.answers[q.id] = e.target.value;
+          syncStudent(currentStudent);
+        };
+        textWrapper.appendChild(textarea);
+        area.appendChild(textWrapper);
+      } else if (q.type === 'relacionar') {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'space-y-4';
+        const guide = document.createElement('p');
+        guide.className = 'text-xs text-slate-400 italic';
+        guide.innerText = 'Haz clic en un elemento de la columna izquierda y luego en su correspondiente de la derecha para unirlos.';
+        wrapper.appendChild(guide);
+
+        const currentPairs = currentStudent.answers[q.id] || {};
+        const pairsGrid = document.createElement('div');
+        pairsGrid.className = 'grid grid-cols-1 md:grid-cols-2 gap-4';
+
+        const leftCol = document.createElement('div');
+        leftCol.className = 'space-y-2';
+        const rightCol = document.createElement('div');
+        rightCol.className = 'space-y-2';
+
+        (q.pairs || []).forEach(p => {
+          const isSelected = matchingSelectedLeft === p.id;
+          const isMatched = !!currentPairs[p.id];
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = `w-full p-3 rounded-xl border text-left text-xs font-bold transition-all flex items-center justify-between ${
+            isSelected ? 'bg-pink-600/30 border-pink-500 text-white ring-2 ring-pink-500/50' : isMatched ? 'bg-slate-900/90 border-emerald-500/50 text-emerald-300' : 'bg-slate-900/60 border-slate-700 text-slate-300 hover:bg-slate-900'
+          }`;
+          btn.innerHTML = `<span>${p.left}</span>${isMatched ? '<span class="text-[10px] text-emerald-400 font-mono">✓ unido</span>' : ''}`;
+          btn.onclick = () => {
+            matchingSelectedLeft = p.id;
+            renderQuestion();
+          };
+          leftCol.appendChild(btn);
+        });
+
+        const shuffledRights = [...(q.pairs || [])].map(p => p.right);
+        shuffledRights.forEach(r => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'w-full p-3 rounded-xl border border-slate-700 bg-slate-900/60 text-slate-300 hover:bg-slate-900 text-left text-xs font-medium transition-all';
+          btn.innerText = r;
+          btn.onclick = () => {
+            if (matchingSelectedLeft) {
+              const currentMatches = { ...(currentStudent.answers[q.id] || {}) };
+              currentMatches[matchingSelectedLeft] = r;
+              currentStudent.answers[q.id] = currentMatches;
+              matchingSelectedLeft = null;
+              syncStudent(currentStudent);
+              renderQuestion();
+            }
+          };
+          rightCol.appendChild(btn);
+        });
+
+        pairsGrid.appendChild(leftCol);
+        pairsGrid.appendChild(rightCol);
+        wrapper.appendChild(pairsGrid);
+        area.appendChild(wrapper);
+      }
+
+      document.getElementById('btnPrev').disabled = currentQIdx === 0;
+      document.getElementById('btnNext').innerText = currentQIdx === activeQuestions.length - 1 ? 'Finalizar Examen' : 'Siguiente →';
+    }
+
+    window.prevQuestion = function() {
+      if (currentQIdx > 0) {
+        currentQIdx--;
+        renderQuestion();
+      }
+    };
+
+    window.nextQuestion = function() {
+      if (currentQIdx < activeQuestions.length - 1) {
+        currentQIdx++;
+        renderQuestion();
+      } else {
+        submitExam();
+      }
+    };
+
+    function calculateScore() {
+      let earned = 0;
+      const totalPoints = activeQuestions.reduce((acc, q) => acc + (q.points || 25), 0) || 100;
+
+      activeQuestions.forEach(q => {
+        const studentAns = currentStudent.answers[q.id];
+        if (studentAns === undefined || studentAns === null) return;
+
+        if (q.type === 'opcion_multiple') {
+          if (studentAns === q.correct) earned += q.points;
+        } else if (q.type === 'abierta') {
+          if (typeof studentAns === 'string' && studentAns.trim().length >= 10) {
+            earned += q.points;
+          }
+        } else if (q.type === 'relacionar' && q.pairs) {
+          const matches = studentAns || {};
+          let rights = 0;
+          q.pairs.forEach(p => {
+            if (matches[p.id] === p.right) rights++;
+          });
+          earned += Math.round((q.points * rights) / q.pairs.length);
+        }
+      });
+
+      return { earned, totalPoints, pct: Math.round((earned / totalPoints) * 100) };
+    }
+
+    function submitExam() {
+      const { earned, totalPoints } = calculateScore();
+      currentStudent.score = earned;
+      if (currentStudent.status !== 'forced_submission_cheat') {
+        currentStudent.status = 'submitted';
+      }
+      syncStudent(currentStudent);
+
+      document.getElementById('examActiveArea').classList.add('hidden');
+      document.getElementById('resultsArea').classList.remove('hidden');
+      document.getElementById('finalScoreText').innerText = `${earned} / ${totalPoints}`;
+
+      try {
+        confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+      } catch (e) {}
+
+      // Render feedback
+      const list = document.getElementById('resultsFeedbackList');
+      list.innerHTML = activeQuestions.map((q, idx) => `
+        <div class="p-4 rounded-2xl bg-slate-900 border border-slate-700/80 text-xs space-y-1.5">
+          <p class="font-bold text-white">${idx + 1}. ${q.question}</p>
+          <p class="text-slate-400 font-mono text-[11px]">${q.explanation || ''}</p>
+        </div>
+      `).join('');
+    }
+
+    // Teacher Table Render
+    function renderTeacherTable() {
+      const tbody = document.getElementById('teacherTableBody');
+      const list = Object.values(studentsDB);
+      document.getElementById('tableTotalStudents').innerText = list.length;
+
+      if (list.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="py-12 text-center text-slate-500">Ningún alumno conectado aún. Escanea el código QR o comparte el link del examen.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = list.map(st => {
+        const answered = Object.keys(st.answers || {}).length;
+        const total = activeQuestions.length || 1;
+        const pct = Math.round((answered / total) * 100);
+
+        let statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300">En Sala</span>';
+        if (st.status === 'in_progress') {
+          statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 animate-pulse">En Examen</span>';
+        } else if (st.status === 'forced_submission_cheat') {
+          statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-400">Expulsado</span>';
+        } else if (st.status === 'submitted') {
+          statusBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-400">Completado</span>';
+        }
+
+        let warnBadge = `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${st.warnings === 0 ? 'bg-emerald-500/20 text-emerald-400' : st.warnings < 3 ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-600 text-white'}">${st.warnings} / 3</span>`;
+
+        return `
+          <tr class="hover:bg-slate-700/30">
+            <td class="py-3 px-6">
+              <div class="font-bold text-white">${st.fullName}</div>
+              <div class="text-[11px] mono text-indigo-300">${st.matricula}</div>
+            </td>
+            <td class="py-3 px-4">${statusBadge}</td>
+            <td class="py-3 px-4">
+              <div class="w-24">
+                <div class="text-[10px] text-slate-400 mb-1">${answered}/${total} (${pct}%)</div>
+                <div class="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
+                  <div class="bg-indigo-500 h-full rounded-full" style="width: ${pct}%"></div>
+                </div>
+              </div>
+            </td>
+            <td class="py-3 px-4 font-bold text-white">${st.score || 0} pts</td>
+            <td class="py-3 px-4">${warnBadge}</td>
+            <td class="py-3 px-6 text-right">
+              <button onclick="resetStudent('${st.matricula}')" class="p-1 rounded bg-slate-900 border border-slate-700 text-amber-400 hover:text-white" title="Reiniciar intento">🔄</button>
+              <button onclick="deleteStudent('${st.matricula}')" class="p-1 rounded bg-slate-900 border border-slate-700 text-rose-400 hover:text-white ml-1" title="Eliminar">🗑️</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    window.resetStudent = function(mat) {
+      delete studentsDB[mat];
+      if (db) remove(ref(db, 'exams/quimica/students/' + mat));
+      channel.postMessage({ type: 'CLEAR_STUDENTS' });
+      renderTeacherTable();
+      renderWaitingPeers();
+    };
+
+    window.deleteStudent = function(mat) {
+      window.resetStudent(mat);
+    };
+
+    window.seedDemoStudents = function() {
+      const demo = [
+        { fullName: "Sofía Morales", matricula: "A01748291", status: "submitted", score: 100, warnings: 0, answers: { q1: 1, q4: 1 } },
+        { fullName: "Carlos Vega", matricula: "A01332456", status: "in_progress", score: 25, warnings: 1, answers: { q1: 1 } },
+        { fullName: "Mateo Gómez", matricula: "A01987654", status: "waiting", score: 0, warnings: 0, answers: {} }
+      ];
+      demo.forEach(s => syncStudent(s));
+    };
+
+    // Plain text exam parser
+    window.openExamLoader = function() {
+      document.getElementById('examLoaderModal').classList.remove('hidden');
+    };
+
+    window.closeExamLoader = function() {
+      document.getElementById('examLoaderModal').classList.add('hidden');
+    };
+
+    window.loadTemplateSample = function() {
+      document.getElementById('inputExamTitle').value = "Examen de Química General";
+      document.getElementById('plainTextInput').value = `-- TIPO: OPCION_MULTIPLE --
+PREGUNTA: ¿Qué tipo de enlace químico se forma entre un metal y un no metal por transferencia completa de electrones?
+IMAGEN: https://images.unsplash.com/photo-1532187863486-abf9dbad1b69?w=800&auto=format&fit=crop&q=80
+A) Enlace Covalente Polar
+B) Enlace Iónico (Electrovalente)
+C) Enlace Metálico
+D) Enlace Covalente Apolar
+CORRECTA: B
+RETROALIMENTACION: El enlace iónico resulta de la gran diferencia de electronegatividad.
+
+-- TIPO: RELACIONAR --
+PREGUNTA: Relaciona cada sustancia química con su clasificación correspondiente:
+IMAGEN: https://images.unsplash.com/photo-1603126857599-f6e157fa2fe6?w=800&auto=format&fit=crop&q=80
+PAR: NaCl | Sal binaria iónica
+PAR: H2SO4 | Ácido oxácido
+PAR: He | Gas noble
+PAR: NaOH | Base o hidróxido
+RETROALIMENTACION: NaCl es sal neutra, H2SO4 ácido fuerte, He gas inerte y NaOH álcali.
+
+-- TIPO: ABIERTA --
+PREGUNTA: Explica el principio de conservación de la materia formulado por Lavoisier.
+IMAGEN: https://images.unsplash.com/photo-1507668077129-56e32842fceb?w=800&auto=format&fit=crop&q=80
+RESPUESTA_MODELO: La materia no se crea ni se destruye, solo se transforma.
+RETROALIMENTACION: La masa se conserva en cualquier reacción ordinaria.`;
+    };
+
+    window.loadPlainTextExam = function() {
+      const text = document.getElementById('plainTextInput').value.trim();
+      if (!text) return alert("Por favor pega las preguntas del examen.");
+
+      const rawBlocks = text.split(/(?=^(?:--\s*TIPO\s*:|PREGUNTA\s*:))/gmi).map(b => b.trim()).filter(Boolean);
+      if (rawBlocks.length === 0) return alert("No se detectaron preguntas en el formato especificado.");
+
       const parsed = [];
-      blocks.forEach((block, idx) => {
+      rawBlocks.forEach((block, idx) => {
         const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+        let qType = 'opcion_multiple';
         let qText = '';
-        const opts = {};
+        let imgUrl = '';
         let correctLetter = '';
-        let retro = '';
+        let explanation = '';
+        let reference = '';
+        const opts = {};
+        const pairs = [];
 
         lines.forEach(l => {
+          const typeM = l.match(/^--\s*TIPO\s*:\s*([A-Za-z_]+)\s*--?$/i);
+          if (typeM) {
+            const t = typeM[1].toLowerCase();
+            if (t.includes('abierta')) qType = 'abierta';
+            else if (t.includes('relacion')) qType = 'relacionar';
+            else qType = 'opcion_multiple';
+          }
+          const imgM = l.match(/^(?:IMAGEN|IMAGE|IMG)\s*:\s*(https?:\/\/[^\s]+)$/i);
+          if (imgM) imgUrl = imgM[1].trim();
+
           const qM = l.match(/^PREGUNTA\s*:\s*(.+)$/i);
           if (qM) qText = qM[1].trim();
+
+          const pairM = l.match(/^(?:PAR|PAIR)\s*:\s*(.+?)\s*\|\s*(.+)$/i);
+          if (pairM) pairs.push({ id: `p${pairs.length+1}`, left: pairM[1].trim(), right: pairM[2].trim() });
 
           const optM = l.match(/^([A-Da-d])[\)\.\:\-]\s*(.+)$/);
           if (optM) opts[optM[1].toUpperCase()] = optM[2].trim();
@@ -166,69 +1287,61 @@
           if (corM) correctLetter = corM[1].toUpperCase();
 
           const retM = l.match(/^(?:RETROALIMENTACION|RETROALIMENTACIÓN|EXPLICACION)\s*:\s*(.*)$/i);
-          if (retM) retro = retM[1].trim();
+          if (retM) explanation = retM[1].trim();
         });
 
-        if (qText && opts['A'] && opts['B']) {
-          const optionsArr = [opts['A'], opts['B'], opts['C'] || '', opts['D'] || ''].filter(Boolean);
-          const correctIdx = correctLetter ? correctLetter.charCodeAt(0) - 65 : 0;
-          parsed.push({
-            id: 'q_' + idx,
-            question: qText,
-            options: optionsArr,
-            correct: correctIdx >= 0 && correctIdx < optionsArr.length ? correctIdx : 0,
-            explanation: retro || "Respuesta correcta: " + correctLetter,
-            points: Math.round(100 / blocks.length)
-          });
+        if (qText) {
+          if (qType === 'relacionar' && pairs.length >= 2) {
+            parsed.push({
+              id: 'q_' + idx,
+              type: 'relacionar',
+              question: qText,
+              imageUrl: imgUrl || undefined,
+              pairs: pairs,
+              explanation: explanation || 'Relaciona cada elemento con su par.',
+              points: Math.round(100 / rawBlocks.length)
+            });
+          } else if (qType === 'abierta') {
+            parsed.push({
+              id: 'q_' + idx,
+              type: 'abierta',
+              question: qText,
+              imageUrl: imgUrl || undefined,
+              explanation: explanation || 'Pregunta de desarrollo conceptual.',
+              points: Math.round(100 / rawBlocks.length)
+            });
+          } else {
+            const arr = [opts['A'], opts['B'], opts['C'] || '', opts['D'] || ''].filter(Boolean);
+            const corIdx = correctLetter ? correctLetter.charCodeAt(0) - 65 : 0;
+            parsed.push({
+              id: 'q_' + idx,
+              type: 'opcion_multiple',
+              question: qText,
+              imageUrl: imgUrl || undefined,
+              options: arr,
+              correct: corIdx,
+              explanation: explanation || `Respuesta correcta: ${correctLetter}`,
+              points: Math.round(100 / rawBlocks.length)
+            });
+          }
         }
       });
 
-      if (parsed.length === 0) {
-        return alert("No se pudo interpretar ninguna pregunta válida. Revisa el formato de ejemplo.");
-      }
+      if (parsed.length === 0) return alert("No se pudo interpretar el formato de preguntas.");
 
       activeQuestions = parsed;
-      examTitle = document.getElementById('inputExamTitle').value.trim() || "Examen de Química";
+      examTitle = document.getElementById('inputExamTitle').value.trim() || examTitle;
       document.getElementById('examMainTitle').innerText = examTitle;
+      document.getElementById('registerExamTitle').innerText = examTitle;
 
-      if (db) {
-        set(ref(db, 'exams/quimica/active_exam'), { title: examTitle, questions: parsed });
-      }
-      channel.postMessage({ type: 'NEW_EXAM', title: examTitle, questions: parsed });
+      if (db) set(ref(db, 'exams/quimica/active_exam'), { title: examTitle, questions: parsed });
+      channel.postMessage({ type: 'EXAM_UPDATE', title: examTitle, questions: parsed });
 
-      alert("¡Examen cargado y publicado con éxito! (" + parsed.length + " preguntas sincronizadas en tiempo real).");
       closeExamLoader();
-      renderTeacherTable();
+      alert(`¡Examen actualizado con éxito! (${parsed.length} preguntas sincronizadas).`);
     };
 
-    window.loadTemplateSample = function() {
-      document.getElementById('plainTextInput').value = 
-`PREGUNTA: ¿Qué tipo de enlace químico se forma entre un metal y un no metal por transferencia de electrones?
-A) Enlace Covalente Polar
-B) Enlace Iónico
-C) Enlace Metálico
-D) Enlace Covalente Apolar
-CORRECTA: B
-RETROALIMENTACION: El enlace iónico resulta de la transferencia electrónica debido a la gran diferencia de electronegatividad.
-
-PREGUNTA: Según la ley de conservación de la materia, ¿cuáles coeficientes balancean: _ C3H8 + _ O2 -> _ CO2 + _ H2O?
-A) 1, 5, 3, 4
-B) 1, 3, 3, 4
-C) 2, 7, 6, 8
-D) 1, 10, 3, 8
-CORRECTA: A
-RETROALIMENTACION: 1 C3H8 + 5 O2 -> 3 CO2 + 4 H2O produce conservación de átomos en ambos lados.
-
-PREGUNTA: Si una solución acuosa tiene [H3O+] = 1 x 10^-3 M a 25°C, ¿cuál es su pH?
-A) pH = 11 (Básica)
-B) pH = 3 (Ácida)
-C) pH = 7 (Neutra)
-D) pH = -3 (Anfótera)
-CORRECTA: B
-RETROALIMENTACION: pH = -log(10^-3) = 3 (solución ácida).`;
-    };
-
-    // 2. GENERACIÓN DE CÓDIGO QR
+    // QR Modal
     window.showQRCodeModal = function() {
       const studentUrl = window.location.origin + window.location.pathname;
       document.getElementById('qrUrlText').innerText = studentUrl;
@@ -237,7 +1350,7 @@ RETROALIMENTACION: pH = -log(10^-3) = 3 (solución ácida).`;
         new QRious({
           element: qrCanvas,
           value: studentUrl,
-          size: 260,
+          size: 200,
           background: '#ffffff',
           foreground: '#0f172a'
         });
@@ -250,488 +1363,41 @@ RETROALIMENTACION: pH = -log(10^-3) = 3 (solución ácida).`;
     };
 
     window.copyStudentUrl = function() {
-      const studentUrl = window.location.origin + window.location.pathname;
-      navigator.clipboard.writeText(studentUrl);
+      navigator.clipboard.writeText(window.location.origin + window.location.pathname);
       alert("Enlace copiado al portapapeles.");
     };
 
-    // 3. CONTROL DE BASE DE DATOS
-    window.clearDatabaseResults = function() {
-      if (confirm("⚠️ ¿Estás seguro de LIMPIAR todos los resultados de los alumnos?\n\nEsto borrará las notas de los alumnos anteriores en Firebase para aplicar el examen a un NUEVO GRUPO.\n(Las preguntas del examen permanecerán intactas).")) {
+    // Confirm Clear Database
+    window.confirmClearDatabase = function() {
+      if (confirm("⚠️ ¿Estás seguro de reiniciar la base de datos de alumnos?\n\nEsto borrará las notas anteriores en Firebase para aplicar el examen a un NUEVO GRUPO.\n(Tus preguntas NO se borrarán).")) {
         studentsDB = {};
         if (db) remove(ref(db, 'exams/quimica/students'));
         channel.postMessage({ type: 'CLEAR_STUDENTS' });
+        resetToWaitingRoom();
         renderTeacherTable();
-        alert("¡Base de datos de alumnos reiniciada con éxito para el nuevo grupo!");
+        renderWaitingPeers();
+        alert("¡Base de datos limpia y lista para el nuevo grupo!");
       }
     };
 
-    // SISTEMA ANTI-TRAMPAS
-    document.addEventListener("visibilitychange", () => {
-      if (currentStudent.status === 'in_progress' && (document.hidden || document.visibilityState === 'hidden')) {
-        handleTabViolation("Cambio de pestaña o minimizado detectado");
-      }
-    });
-
-    window.addEventListener("blur", () => {
-      if (currentStudent.status === 'in_progress') {
-        handleTabViolation("Ventana desenfocada o cambio de aplicación");
-      }
-    });
-
-    function handleTabViolation(reason) {
-      currentStudent.warnings++;
-      currentStudent.cheatLogs.push({
-        time: new Date().toLocaleTimeString(),
-        reason: reason,
-        warningNumber: currentStudent.warnings
-      });
-
-      syncStudent(currentStudent);
-
-      if (currentStudent.warnings >= 3) {
-        currentStudent.status = 'forced_submission_cheat';
-        syncStudent(currentStudent);
-        showCheaterModal();
-      } else {
-        showWarningModal(currentStudent.warnings);
-      }
-    }
-
-    function showWarningModal(warnNum) {
-      const modal = document.getElementById('warningModal');
-      document.getElementById('warnCountText').innerText = warnNum + " de 3";
-      modal.classList.remove('hidden');
-    }
-
-    window.closeWarningModal = function() {
-      document.getElementById('warningModal').classList.add('hidden');
-      updateExamHeader();
-    };
-
-    function showCheaterModal() {
-      document.getElementById('warningModal').classList.add('hidden');
-      document.getElementById('cheaterExpulsionModal').classList.remove('hidden');
-      calculateFinalGrade();
-      setTimeout(() => {
-        document.getElementById('cheaterExpulsionModal').classList.add('hidden');
-        renderResults();
-      }, 3500);
-    }
-
-    window.setRole = function(role) {
-      document.getElementById('studentSection').classList.toggle('hidden', role !== 'student');
-      document.getElementById('teacherSection').classList.toggle('hidden', role !== 'teacher');
-      document.getElementById('btnRoleStudent').className = role === 'student' ? 'px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 text-white' : 'px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400';
-      document.getElementById('btnRoleTeacher').className = role === 'teacher' ? 'px-3 py-1.5 rounded-lg text-xs font-bold bg-purple-600 text-white' : 'px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400';
-      if (role === 'teacher') renderTeacherTable();
-    };
-
-    window.startExam = function(e) {
-      e.preventDefault();
-      const name = document.getElementById('inputName').value.trim();
-      const mat = document.getElementById('inputMatricula').value.trim().toUpperCase();
-      if (!name || !mat) return alert("Completa tu nombre y matrícula.");
-
-      currentStudent.fullName = name;
-      currentStudent.matricula = mat;
-      currentStudent.status = 'in_progress';
-      currentStudent.startTime = Date.now();
-      currentStudent.answers = {};
-      currentStudent.warnings = 0;
-      currentStudent.cheatLogs = [];
-
-      syncStudent(currentStudent);
-
-      document.getElementById('studentRegisterForm').classList.add('hidden');
-      document.getElementById('examActiveArea').classList.remove('hidden');
-      renderQuestion();
-      updateExamHeader();
-    };
-
-    function updateExamHeader() {
-      document.getElementById('examStudentName').innerText = currentStudent.fullName;
-      document.getElementById('examStudentMat').innerText = currentStudent.matricula;
-      const warnBadge = document.getElementById('examWarnBadge');
-      warnBadge.innerText = "Faltas: " + currentStudent.warnings + " / 3";
-      if (currentStudent.warnings === 0) {
-        warnBadge.className = "px-3 py-1 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
-      } else if (currentStudent.warnings === 1) {
-        warnBadge.className = "px-3 py-1 rounded-xl text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30";
-      } else {
-        warnBadge.className = "px-3 py-1 rounded-xl text-xs font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30 animate-pulse";
-      }
-    }
-
-    function renderQuestion() {
-      const q = activeQuestions[currentQIdx] || activeQuestions[0];
-      if (!q) return;
-      document.getElementById('qCounter').innerText = "Pregunta " + (currentQIdx + 1) + " de " + activeQuestions.length;
-      document.getElementById('qTitle').innerText = (currentQIdx + 1) + ". " + q.question;
-
-      const container = document.getElementById('qOptionsContainer');
-      container.innerHTML = '';
-
-      q.options.forEach((opt, idx) => {
-        const isSelected = currentStudent.answers[q.id] === idx;
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = "w-full text-left p-4 rounded-xl border transition-all flex items-center space-x-3 " +
-          (isSelected ? "bg-indigo-600/30 border-indigo-500 text-white font-semibold" : "bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-800");
-        btn.innerHTML = `<span class="w-6 h-6 rounded bg-slate-700 text-xs font-bold flex items-center justify-center font-mono">${String.fromCharCode(65+idx)}</span><span>${opt}</span>`;
-        btn.onclick = () => {
-          currentStudent.answers[q.id] = idx;
-          syncStudent(currentStudent);
-          renderQuestion();
-        };
-        container.appendChild(btn);
-      });
-
-      document.getElementById('btnPrev').disabled = currentQIdx === 0;
-      document.getElementById('btnNext').innerText = currentQIdx === activeQuestions.length - 1 ? "Finalizar Examen" : "Siguiente";
-    }
-
-    window.prevQuestion = function() {
-      if (currentQIdx > 0) { currentQIdx--; renderQuestion(); }
-    };
-
-    window.nextQuestion = function() {
-      if (currentQIdx < activeQuestions.length - 1) {
-        currentQIdx++;
-        renderQuestion();
-      } else {
-        if (confirm("¿Estás seguro de enviar tu examen?")) {
-          currentStudent.status = 'submitted';
-          calculateFinalGrade();
-          syncStudent(currentStudent);
-          renderResults();
-        }
-      }
-    };
-
-    function calculateFinalGrade() {
-      let score = 0;
-      let totalPts = 0;
-      activeQuestions.forEach(q => {
-        totalPts += (q.points || 20);
-        if (currentStudent.answers[q.id] === q.correct) score += (q.points || 20);
-      });
-      currentStudent.score = score;
-      currentStudent.maxScore = totalPts;
-    }
-
-    function renderResults() {
-      document.getElementById('examActiveArea').classList.add('hidden');
-      document.getElementById('examResultsArea').classList.remove('hidden');
-
-      const isCheater = currentStudent.status === 'forced_submission_cheat';
-      document.getElementById('resStatusBanner').className = isCheater ? "p-4 rounded-xl bg-rose-600/20 border border-rose-500 text-rose-300 mb-6" : "p-4 rounded-xl bg-emerald-600/20 border border-emerald-500 text-emerald-300 mb-6";
-      document.getElementById('resStatusTitle').innerText = isCheater ? "⚠️ Examen bloqueado y enviado por 3 faltas de cambio de pestaña" : "✅ Examen entregado correctamente";
-      document.getElementById('resFinalScore').innerText = currentStudent.score + " / " + (currentStudent.maxScore || 100) + " pts";
-
-      const reviewContainer = document.getElementById('resReviewContainer');
-      reviewContainer.innerHTML = '';
-      activeQuestions.forEach((q, idx) => {
-        const studentPick = currentStudent.answers[q.id];
-        const isRight = studentPick === q.correct;
-        const box = document.createElement('div');
-        box.className = "p-4 rounded-xl border mb-3 " + (isRight ? "bg-emerald-950/20 border-emerald-500/40" : "bg-rose-950/20 border-rose-500/40");
-        box.innerHTML = `
-          <div class="flex justify-between font-bold text-sm mb-1">
-            <span>${idx + 1}. ${q.question}</span>
-            <span class="${isRight ? 'text-emerald-400' : 'text-rose-400'}">${isRight ? '+' + (q.points || 20) + ' pts' : '0 pts'}</span>
-          </div>
-          <p class="text-xs text-slate-300 mb-1">Tu respuesta: <span class="font-semibold ${isRight ? 'text-emerald-400' : 'text-rose-400'}">${studentPick !== undefined ? q.options[studentPick] : 'Sin responder'}</span></p>
-          <p class="text-xs text-emerald-400 mb-2">Respuesta correcta: <span class="font-semibold">${q.options[q.correct]}</span></p>
-          <p class="text-xs text-slate-400 bg-slate-900/80 p-2 rounded">💡 Retroalimentación: ${q.explanation}</p>
-        `;
-        reviewContainer.appendChild(box);
-      });
-    }
-
-    function renderTeacherTable() {
-      const tbody = document.getElementById('teacherTableBody');
-      if (!tbody) return;
-      tbody.innerHTML = '';
-
+    // Export CSV
+    window.exportToCSV = function() {
       const list = Object.values(studentsDB);
-      document.getElementById('mTotal').innerText = list.length;
-      document.getElementById('mActive').innerText = list.filter(s => s.status === 'in_progress').length;
-      document.getElementById('mCheated').innerText = list.filter(s => s.warnings >= 3 || s.status === 'forced_submission_cheat').length;
-      document.getElementById('activeQCountBadge').innerText = activeQuestions.length + " preguntas activas";
+      if (list.length === 0) return alert("No hay alumnos registrados.");
+      const rows = [["Matricula", "Nombre", "Estado", "Calificacion", "Faltas"]];
+      list.forEach(s => rows.push([`"${s.matricula}"`, `"${s.fullName}"`, s.status, s.score || 0, s.warnings || 0]));
+      const csv = "data:text/csv;charset=utf-8," + rows.map(r => r.join(',')).join('\n');
+      const a = document.createElement('a');
+      a.href = encodeURI(csv);
+      a.download = `Reporte_${examTitle.replace(/\s+/g, '_')}.csv`;
+      a.click();
+    };
 
-      if (list.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-slate-500">Esperando que los alumnos se conecten o escaneen el código QR...</td></tr>';
-        return;
-      }
-
-      list.forEach(st => {
-        const tr = document.createElement('tr');
-        tr.className = "border-b border-slate-800 hover:bg-slate-800/40";
-        tr.innerHTML = `
-          <td class="py-3 px-4">
-            <div class="font-bold text-white">${st.fullName}</div>
-            <div class="text-xs text-indigo-400 font-mono">${st.matricula}</div>
-          </td>
-          <td class="py-3 px-4">
-            ${st.status === 'in_progress' ? '<span class="px-2 py-0.5 rounded text-xs bg-emerald-500/20 text-emerald-400 font-bold">En Examen</span>' :
-              st.status === 'forced_submission_cheat' ? '<span class="px-2 py-0.5 rounded text-xs bg-rose-600 text-white font-bold animate-pulse">EXPULSADO (3 faltas)</span>' :
-              '<span class="px-2 py-0.5 rounded text-xs bg-indigo-500/20 text-indigo-300 font-bold">Completado</span>'}
-          </td>
-          <td class="py-3 px-4 font-mono font-bold text-white">${st.score || 0} pts</td>
-          <td class="py-3 px-4">
-            <span class="px-2.5 py-1 rounded text-xs font-bold ${st.warnings >= 3 ? 'bg-rose-600 text-white' : st.warnings > 0 ? 'bg-amber-500/20 text-amber-300' : 'bg-emerald-500/20 text-emerald-400'}">
-              ${st.warnings} / 3 faltas
-            </span>
-          </td>
-          <td class="py-3 px-4 text-right">
-            <button onclick="deleteStudent('${st.matricula}')" class="text-xs text-rose-400 hover:underline">Eliminar</button>
-          </td>
-        `;
-        tbody.appendChild(tr);
-      });
+    // URL Param ?role=teacher detection
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('role') === 'teacher') {
+      setRole('teacher');
     }
-
-    window.deleteStudent = function(mat) {
-      if (confirm("¿Eliminar al alumno?")) {
-        delete studentsDB[mat];
-        if (db) remove(ref(db, 'exams/quimica/students/' + mat));
-        renderTeacherTable();
-      }
-    };
-
-    window.openExamLoader = function() {
-      document.getElementById('examLoaderModal').classList.remove('hidden');
-    };
-
-    window.closeExamLoader = function() {
-      document.getElementById('examLoaderModal').classList.add('hidden');
-    };
-
-    window.exportCSV = function() {
-      const list = Object.values(studentsDB);
-      if (list.length === 0) return alert("No hay alumnos para exportar.");
-      let csv = "Matricula,Nombre,Estado,Puntaje,Faltas\n";
-      list.forEach(st => {
-        csv += `"${st.matricula}","${st.fullName}","${st.status}",${st.score || 0},${st.warnings}\n`;
-      });
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = "Reporte_Examen.csv";
-      link.click();
-    };
   </script>
-
-  <!-- Navbar -->
-  <header class="border-b border-slate-800 bg-slate-900/90 sticky top-0 z-30 px-6 py-3 flex justify-between items-center">
-    <div class="flex items-center space-x-2">
-      <span class="text-2xl">🧪</span>
-      <span class="font-extrabold text-lg text-white">Química<span class="text-indigo-400">Quiz</span></span>
-      <span class="ml-2 text-xs bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded border border-indigo-500/20">Anti-Trampas + QR</span>
-    </div>
-    <div class="flex items-center space-x-2 bg-slate-800 p-1 rounded-xl border border-slate-700">
-      <button id="btnRoleStudent" onclick="setRole('student')" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 text-white">Vista Alumno</button>
-      <button id="btnRoleTeacher" onclick="setRole('teacher')" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400">Panel Profesor</button>
-    </div>
-  </header>
-
-  <!-- SECCIÓN ALUMNO -->
-  <main id="studentSection" class="max-w-3xl mx-auto px-4 py-8">
-    <div id="studentRegisterForm" class="bg-slate-800/90 border border-slate-700 rounded-2xl p-6 sm:p-8 shadow-xl">
-      <h1 id="examMainTitle" class="text-2xl font-extrabold text-white text-center mb-2">Examen de Química General</h1>
-      <p class="text-slate-400 text-xs text-center mb-6">Ingresa tus datos para comenzar. Sistema con supervisor activo.</p>
-      <form onsubmit="startExam(event)" class="space-y-4 max-w-md mx-auto">
-        <div>
-          <label class="block text-xs font-bold text-slate-300 uppercase mb-1">Nombre Completo</label>
-          <input id="inputName" type="text" required placeholder="Ej. Camila Torres" class="w-full px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-sm">
-        </div>
-        <div>
-          <label class="block text-xs font-bold text-slate-300 uppercase mb-1">Matrícula o Código</label>
-          <input id="inputMatricula" type="text" required placeholder="Ej. A01928374" class="w-full px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-sm font-mono uppercase">
-        </div>
-        <div class="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-slate-300">
-          <p class="font-bold text-amber-300 mb-1">⚠️ AVISO ANTI-TRAMPAS:</p>
-          <p>No cambies de pestaña ni minimices la ventana. El sistema cuenta cada falta. A la 3ra advertencia serás expulsado y se enviará tu examen automáticamente.</p>
-        </div>
-        <button type="submit" class="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-sm transition-all shadow-lg shadow-indigo-600/30">
-          Iniciar Examen
-        </button>
-      </form>
-    </div>
-
-    <!-- Área de Examen Activo -->
-    <div id="examActiveArea" class="hidden space-y-6">
-      <div class="flex justify-between items-center bg-slate-800/90 p-4 rounded-xl border border-slate-700">
-        <div>
-          <span id="examStudentName" class="font-bold text-white text-sm"></span>
-          <span id="examStudentMat" class="text-xs text-indigo-400 font-mono ml-2"></span>
-        </div>
-        <div id="examWarnBadge" class="px-3 py-1 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-400">
-          Faltas: 0 / 3
-        </div>
-      </div>
-
-      <div class="bg-slate-800/90 p-6 rounded-2xl border border-slate-700 shadow-xl">
-        <div class="text-xs text-slate-400 mb-2 font-mono">
-          <span id="qCounter"></span>
-        </div>
-        <h2 id="qTitle" class="text-lg font-bold text-white mb-4"></h2>
-        <div id="qOptionsContainer" class="space-y-3 my-6"></div>
-        <div class="flex justify-between pt-4 border-t border-slate-700">
-          <button id="btnPrev" onclick="prevQuestion()" class="px-4 py-2 bg-slate-900 hover:bg-slate-700 text-xs font-semibold rounded-xl text-slate-300">Anterior</button>
-          <button id="btnNext" onclick="nextQuestion()" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-bold rounded-xl text-white">Siguiente</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Área de Resultados -->
-    <div id="examResultsArea" class="hidden space-y-6">
-      <div id="resStatusBanner" class="p-4 rounded-xl">
-        <h2 id="resStatusTitle" class="font-bold text-lg"></h2>
-      </div>
-      <div class="bg-slate-800/90 p-6 rounded-2xl border border-slate-700 text-center">
-        <p class="text-xs font-bold text-slate-400 uppercase tracking-wider">Calificación Final</p>
-        <div id="resFinalScore" class="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-pink-400 my-2"></div>
-      </div>
-      <div id="resReviewContainer"></div>
-    </div>
-  </main>
-
-  <!-- SECCIÓN PROFESOR (PANEL EN VIVO) -->
-  <main id="teacherSection" class="hidden max-w-5xl mx-auto px-4 py-8 space-y-6">
-    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-800/90 p-5 rounded-2xl border border-slate-700">
-      <div>
-        <h1 class="text-xl sm:text-2xl font-black text-white">Panel del Docente</h1>
-        <p class="text-xs text-slate-400 mt-0.5">Control de examen, generación de QR y monitoreo de trampas</p>
-        <span id="activeQCountBadge" class="inline-block mt-2 text-[11px] font-mono text-indigo-400 bg-indigo-500/10 px-2.5 py-0.5 rounded border border-indigo-500/20"></span>
-      </div>
-
-      <div class="flex flex-wrap items-center gap-2">
-        <button onclick="openExamLoader()" class="px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 shadow-md transition-colors flex items-center space-x-1.5">
-          <span>📝 Cargar Examen (Texto)</span>
-        </button>
-        <button onclick="showQRCodeModal()" class="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-200 bg-slate-700 hover:bg-slate-600 transition-colors flex items-center space-x-1.5">
-          <span>📱 Mostrar QR</span>
-        </button>
-        <button onclick="clearDatabaseResults()" class="px-3.5 py-2 rounded-xl text-xs font-bold text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-colors flex items-center space-x-1.5" title="Borrar intentos para un nuevo grupo">
-          <span>🔄 Limpiar / Nuevo Grupo</span>
-        </button>
-        <button onclick="exportCSV()" class="px-3.5 py-2 rounded-xl text-xs font-bold text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 transition-colors">
-          <span>📊 CSV</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- Métricas -->
-    <div class="grid grid-cols-3 gap-3 text-center">
-      <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-        <div class="text-xs text-slate-400 uppercase font-bold">Total Alumnos</div>
-        <div id="mTotal" class="text-2xl font-black text-indigo-400 mt-1">0</div>
-      </div>
-      <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-        <div class="text-xs text-slate-400 uppercase font-bold">En Examen</div>
-        <div id="mActive" class="text-2xl font-black text-emerald-400 mt-1">0</div>
-      </div>
-      <div class="bg-slate-800 p-4 rounded-xl border border-slate-700">
-        <div class="text-xs text-slate-400 uppercase font-bold">Sancionados (3 faltas)</div>
-        <div id="mCheated" class="text-2xl font-black text-rose-400 mt-1">0</div>
-      </div>
-    </div>
-
-    <!-- Tabla en Vivo -->
-    <div class="bg-slate-800/90 border border-slate-700 rounded-2xl overflow-hidden shadow-xl">
-      <table class="w-full text-left text-xs">
-        <thead class="bg-slate-900 border-b border-slate-700 text-slate-400 font-bold uppercase">
-          <tr>
-            <th class="py-3 px-4">Alumno</th>
-            <th class="py-3 px-4">Estado</th>
-            <th class="py-3 px-4">Calificación</th>
-            <th class="py-3 px-4">Faltas Anti-Trampas</th>
-            <th class="py-3 px-4 text-right">Acción</th>
-          </tr>
-        </thead>
-        <tbody id="teacherTableBody">
-          <tr><td colspan="5" class="text-center py-8 text-slate-500">Esperando que los alumnos se conecten...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </main>
-
-  <!-- MODAL: CARGAR EXAMEN DESDE TEXTO PLANO -->
-  <div id="examLoaderModal" class="hidden fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
-    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full p-6 shadow-2xl flex flex-col max-h-[90vh]">
-      <div class="flex justify-between items-center mb-4 pb-3 border-b border-slate-800">
-        <h3 class="text-base font-bold text-white">Cargar Examen desde Texto Plano</h3>
-        <button onclick="closeExamLoader()" class="text-slate-400 hover:text-white">✕</button>
-      </div>
-
-      <div class="space-y-3 overflow-y-auto pr-1 text-xs">
-        <div>
-          <label class="block font-bold text-slate-300 uppercase mb-1">Título del Examen:</label>
-          <input id="inputExamTitle" type="text" value="Examen de Química General" class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs">
-        </div>
-
-        <div class="flex justify-between items-center pt-2">
-          <span class="font-bold text-slate-300">Pega aquí tus preguntas:</span>
-          <button onclick="loadTemplateSample()" class="text-indigo-400 hover:underline text-xs">Pegar formato de ejemplo</button>
-        </div>
-
-        <textarea id="plainTextInput" rows="10" placeholder="PREGUNTA: ¿Texto?&#10;A) Opción 1&#10;B) Opción 2&#10;C) Opción 3&#10;D) Opción 4&#10;CORRECTA: A&#10;RETROALIMENTACION: Explicación..." class="w-full p-3 bg-slate-950 border border-slate-700 rounded-xl font-mono text-xs text-slate-200"></textarea>
-      </div>
-
-      <div class="flex justify-between items-center pt-4 border-t border-slate-800 mt-4">
-        <button onclick="closeExamLoader()" class="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl text-xs">Cancelar</button>
-        <button onclick="loadPlainTextExam()" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 font-bold text-white rounded-xl text-xs shadow-md">
-          Cargar y Publicar Examen
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- MODAL: CÓDIGO QR PARA ALUMNOS -->
-  <div id="qrModal" class="hidden fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
-    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full p-6 text-center shadow-2xl">
-      <h3 class="text-lg font-black text-white">Código QR del Examen</h3>
-      <p class="text-xs text-slate-400 mt-1">Los alumnos pueden escanearlo con la cámara de su celular</p>
-      
-      <div class="my-5 p-3 bg-white rounded-xl inline-block">
-        <canvas id="qrCanvas"></canvas>
-      </div>
-
-      <p id="qrUrlText" class="font-mono text-[11px] text-indigo-300 truncate bg-slate-800 p-2 rounded-lg mb-4"></p>
-
-      <div class="flex space-x-2">
-        <button onclick="copyStudentUrl()" class="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl">Copiar Enlace</button>
-        <button onclick="closeQRCodeModal()" class="py-2 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl">Cerrar</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- MODAL DE ADVERTENCIA ANTI-TRAMPAS -->
-  <div id="warningModal" class="hidden fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
-    <div class="bg-slate-900 border-2 border-rose-500 rounded-2xl max-w-sm w-full p-6 text-center shadow-2xl">
-      <div class="text-4xl mb-2">🚨</div>
-      <h3 class="text-lg font-black text-rose-400 uppercase">¡Falta Anti-Trampas!</h3>
-      <p class="text-xs text-slate-300 mt-2">Has salido de la pestaña o minimizado la ventana del examen.</p>
-      <div class="my-4 p-2 bg-slate-800 rounded-lg text-rose-300 text-xs font-bold font-mono">
-        Advertencia <span id="warnCountText">1 de 3</span>
-      </div>
-      <p class="text-[11px] text-slate-400 mb-4">Esta acción fue reportada en vivo al profesor. A la 3ra advertencia serás expulsado.</p>
-      <button onclick="closeWarningModal()" class="w-full py-2.5 bg-rose-600 hover:bg-rose-500 font-bold text-xs rounded-xl text-white">
-        Comprendo y vuelvo a mi examen
-      </button>
-    </div>
-  </div>
-
-  <!-- MODAL DE EXPULSIÓN (3 FALTAS) -->
-  <div id="cheaterExpulsionModal" class="hidden fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-4">
-    <div class="bg-slate-900 border-2 border-red-600 rounded-2xl max-w-sm w-full p-6 text-center shadow-2xl animate-bounce">
-      <div class="text-5xl mb-2">⛔</div>
-      <h3 class="text-xl font-black text-white">¡EXPULSADO POR FALTAS!</h3>
-      <p class="text-xs text-rose-300 mt-2 font-semibold">Alcanzaste las 3 advertencias por salirte de la pestaña. Tu examen se ha bloqueado y finalizado automáticamente.</p>
-    </div>
-  </div>
-
 </body>
 </html>

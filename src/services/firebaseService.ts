@@ -1,16 +1,18 @@
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import { getDatabase, ref, set, onValue, remove, Database, Unsubscribe } from 'firebase/database';
-import { StudentExamState, FirebaseConfig, Question } from '../types';
+import { StudentExamState, FirebaseConfig, Question, GlobalSessionState } from '../types';
 import { CHEMISTRY_QUESTIONS } from '../data/questions';
 
 const STORAGE_KEY_FIREBASE_CONFIG = 'quimica_firebase_config_v1';
 const STORAGE_KEY_STUDENTS_LOCAL = 'quimica_students_local_db';
 const STORAGE_KEY_EXAM_DATA = 'quimica_exam_data_v1';
+const STORAGE_KEY_SESSION_DATA = 'quimica_global_session_v1';
 const CHANNEL_NAME = 'quimica_live_proctor_channel';
 
-// Path in Firebase Realtime Database
+// Paths in Firebase Realtime Database
 const DB_BASE_PATH = 'exams/quimica_general_2026/students';
 const DB_EXAM_PATH = 'exams/quimica_general_2026/exam_data';
+const DB_SESSION_PATH = 'exams/quimica_general_2026/global_session';
 
 export interface ExamDataPayload {
   title: string;
@@ -24,21 +26,33 @@ class FirebaseRealtimeService {
   private config: FirebaseConfig | null = null;
   private broadcastChannel: BroadcastChannel | null = null;
   private localStudentsCache: Record<string, StudentExamState> = {};
+  
   private activeExamData: ExamDataPayload = {
     title: 'Examen de Química General',
     questions: CHEMISTRY_QUESTIONS,
     updatedAt: Date.now()
   };
 
+  private globalSession: GlobalSessionState = {
+    status: 'waiting_room',
+    durationMinutes: 20,
+    title: 'Examen de Química General',
+    updatedAt: Date.now()
+  };
+
   private activeListeners: Set<(students: Record<string, StudentExamState>) => void> = new Set();
   private examListeners: Set<(data: ExamDataPayload) => void> = new Set();
+  private sessionListeners: Set<(session: GlobalSessionState) => void> = new Set();
+
   private firebaseUnsub: Unsubscribe | null = null;
   private firebaseExamUnsub: Unsubscribe | null = null;
+  private firebaseSessionUnsub: Unsubscribe | null = null;
 
   constructor() {
     this.initBroadcastChannel();
     this.loadConfigFromStorage();
     this.loadExamFromStorage();
+    this.loadSessionFromStorage();
   }
 
   private initBroadcastChannel() {
@@ -56,6 +70,9 @@ class FirebaseRealtimeService {
           } else if (event.data?.type === 'EXAM_DATA_UPDATE') {
             this.activeExamData = event.data.payload as ExamDataPayload;
             this.notifyExamListeners();
+          } else if (event.data?.type === 'SESSION_UPDATE') {
+            this.globalSession = event.data.payload as GlobalSessionState;
+            this.notifySessionListeners();
           }
         };
       } catch (err) {
@@ -105,6 +122,21 @@ class FirebaseRealtimeService {
     }
   }
 
+  private loadSessionFromStorage() {
+    if (typeof window === 'undefined') return;
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SESSION_DATA);
+      if (saved) {
+        const parsed = JSON.parse(saved) as GlobalSessionState;
+        if (parsed && parsed.status) {
+          this.globalSession = parsed;
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
   public initFirebase(config: FirebaseConfig): boolean {
     try {
       this.config = config;
@@ -120,6 +152,7 @@ class FirebaseRealtimeService {
 
       this.setupFirebaseListener();
       this.setupFirebaseExamListener();
+      this.setupFirebaseSessionListener();
       return true;
     } catch (err) {
       console.error('Error al inicializar Firebase Realtime Database:', err);
@@ -143,16 +176,131 @@ class FirebaseRealtimeService {
     this.config = null;
     this.db = null;
     this.app = null;
-    if (this.firebaseUnsub) {
-      this.firebaseUnsub();
-      this.firebaseUnsub = null;
-    }
-    if (this.firebaseExamUnsub) {
-      this.firebaseExamUnsub();
-      this.firebaseExamUnsub = null;
-    }
+    if (this.firebaseUnsub) this.firebaseUnsub();
+    if (this.firebaseExamUnsub) this.firebaseExamUnsub();
+    if (this.firebaseSessionUnsub) this.firebaseSessionUnsub();
     localStorage.removeItem(STORAGE_KEY_FIREBASE_CONFIG);
     this.notifyListeners();
+  }
+
+  // --- GLOBAL EXAM SESSION (KAHOOT STYLE WAITING ROOM & TIMER) ---
+
+  public getGlobalSession(): GlobalSessionState {
+    return this.globalSession;
+  }
+
+  public async setGlobalSession(session: GlobalSessionState): Promise<void> {
+    this.globalSession = session;
+    try {
+      localStorage.setItem(STORAGE_KEY_SESSION_DATA, JSON.stringify(session));
+    } catch {
+      // Ignore
+    }
+
+    if (this.broadcastChannel) {
+      try {
+        this.broadcastChannel.postMessage({
+          type: 'SESSION_UPDATE',
+          payload: session
+        });
+      } catch {
+        // Ignore
+      }
+    }
+    this.notifySessionListeners();
+
+    if (this.db) {
+      try {
+        const sessionRef = ref(this.db, DB_SESSION_PATH);
+        await set(sessionRef, session);
+      } catch (err) {
+        console.error('Error guardando sesión en Firebase:', err);
+      }
+    }
+  }
+
+  public async startExamForEveryone(durationMinutes: number): Promise<void> {
+    const startedAt = Date.now();
+    const endsAt = startedAt + durationMinutes * 60 * 1000;
+
+    const newSession: GlobalSessionState = {
+      status: 'active',
+      durationMinutes,
+      startedAt,
+      endsAt,
+      title: this.activeExamData.title,
+      updatedAt: startedAt
+    };
+
+    // Transition all waiting students to 'in_progress'
+    const studentPromises: Promise<void>[] = [];
+    Object.values(this.localStudentsCache).forEach((student) => {
+      if (student.status === 'waiting') {
+        student.status = 'in_progress';
+        student.startedAt = startedAt;
+        studentPromises.push(this.syncStudent(student));
+      }
+    });
+
+    await Promise.all(studentPromises);
+    await this.setGlobalSession(newSession);
+  }
+
+  public async resetSessionToWaitingRoom(): Promise<void> {
+    const newSession: GlobalSessionState = {
+      status: 'waiting_room',
+      durationMinutes: this.globalSession.durationMinutes || 20,
+      title: this.activeExamData.title,
+      updatedAt: Date.now()
+    };
+    await this.setGlobalSession(newSession);
+  }
+
+  public subscribeToGlobalSession(callback: (session: GlobalSessionState) => void): () => void {
+    this.sessionListeners.add(callback);
+    callback(this.globalSession);
+
+    if (this.db && !this.firebaseSessionUnsub) {
+      this.setupFirebaseSessionListener();
+    }
+
+    return () => {
+      this.sessionListeners.delete(callback);
+    };
+  }
+
+  private setupFirebaseSessionListener() {
+    if (!this.db) return;
+    if (this.firebaseSessionUnsub) this.firebaseSessionUnsub();
+
+    try {
+      const sessionRef = ref(this.db, DB_SESSION_PATH);
+      this.firebaseSessionUnsub = onValue(sessionRef, (snapshot) => {
+        const val = snapshot.val() as GlobalSessionState;
+        if (val && val.status) {
+          this.globalSession = val;
+          try {
+            localStorage.setItem(STORAGE_KEY_SESSION_DATA, JSON.stringify(val));
+          } catch {
+            // Ignore
+          }
+          this.notifySessionListeners();
+        }
+      });
+    } catch (err) {
+      console.error('Error setupFirebaseSessionListener:', err);
+    }
+  }
+
+  private notifySessionListeners() {
+    const copy = { ...this.globalSession };
+    this.sessionListeners.forEach((fn) => {
+      try {
+        fn(copy);
+      } catch (err) {
+        console.error('Error in session listener:', err);
+      }
+    });
   }
 
   // --- EXAM QUESTIONS MANAGEMENT ---
@@ -169,14 +317,12 @@ class FirebaseRealtimeService {
     };
     this.activeExamData = payload;
 
-    // 1. Save local
     try {
       localStorage.setItem(STORAGE_KEY_EXAM_DATA, JSON.stringify(payload));
     } catch {
       // Ignore
     }
 
-    // 2. Broadcast to tabs
     if (this.broadcastChannel) {
       try {
         this.broadcastChannel.postMessage({
@@ -190,7 +336,6 @@ class FirebaseRealtimeService {
 
     this.notifyExamListeners();
 
-    // 3. Save to Firebase RTDB
     if (this.db) {
       try {
         const examRef = ref(this.db, DB_EXAM_PATH);
@@ -216,9 +361,7 @@ class FirebaseRealtimeService {
 
   private setupFirebaseExamListener() {
     if (!this.db) return;
-    if (this.firebaseExamUnsub) {
-      this.firebaseExamUnsub();
-    }
+    if (this.firebaseExamUnsub) this.firebaseExamUnsub();
 
     try {
       const examRef = ref(this.db, DB_EXAM_PATH);
@@ -324,24 +467,15 @@ class FirebaseRealtimeService {
 
   private setupFirebaseListener() {
     if (!this.db) return;
-
-    if (this.firebaseUnsub) {
-      this.firebaseUnsub();
-    }
+    if (this.firebaseUnsub) this.firebaseUnsub();
 
     try {
       const studentsRef = ref(this.db, DB_BASE_PATH);
       this.firebaseUnsub = onValue(studentsRef, (snapshot) => {
         const val = snapshot.val();
-        if (val) {
-          this.localStudentsCache = val;
-          this.saveLocalCache();
-          this.notifyListeners();
-        } else {
-          this.localStudentsCache = {};
-          this.saveLocalCache();
-          this.notifyListeners();
-        }
+        this.localStudentsCache = val || {};
+        this.saveLocalCache();
+        this.notifyListeners();
       }, (error) => {
         console.error('Firebase Realtime Database listener error:', error);
       });
@@ -370,7 +504,7 @@ class FirebaseRealtimeService {
     }
   }
 
-  // Clear all students to reuse exam with a fresh group!
+  // Clear all students to reuse exam with a fresh group
   public async clearAllStudents(): Promise<void> {
     this.localStudentsCache = {};
     this.saveLocalCache();
@@ -394,9 +528,10 @@ class FirebaseRealtimeService {
         console.error('Error limpiando base de datos:', err);
       }
     }
+    await this.resetSessionToWaitingRoom();
   }
 
-  // Seed sample mock students for instant demonstration in teacher view
+  // Seed sample mock students for instant demonstration
   public seedDemoStudents() {
     const demo: Record<string, StudentExamState> = {
       'DEMO-101': {
@@ -410,9 +545,7 @@ class FirebaseRealtimeService {
         submittedAt: Date.now() - 2 * 60 * 1000,
         currentQuestionIndex: this.activeExamData.questions.length - 1,
         answers: {
-          [this.activeExamData.questions[0]?.id || 'q0']: this.activeExamData.questions[0]?.correctAnswer || 0,
-          [this.activeExamData.questions[1]?.id || 'q1']: this.activeExamData.questions[1]?.correctAnswer || 0,
-          [this.activeExamData.questions[2]?.id || 'q2']: this.activeExamData.questions[2]?.correctAnswer || 0,
+          [this.activeExamData.questions[0]?.id || 'q0']: 1,
         },
         score: 100,
         maxScore: 100,
@@ -431,11 +564,11 @@ class FirebaseRealtimeService {
         startedAt: Date.now() - 8 * 60 * 1000,
         currentQuestionIndex: 2,
         answers: {
-          [this.activeExamData.questions[0]?.id || 'q0']: this.activeExamData.questions[0]?.correctAnswer || 0,
+          [this.activeExamData.questions[0]?.id || 'q0']: 1,
         },
-        score: 40,
+        score: 50,
         maxScore: 100,
-        percentage: 40,
+        percentage: 50,
         cheatWarningsCount: 1,
         cheatLogs: [
           {
@@ -452,35 +585,16 @@ class FirebaseRealtimeService {
         fullName: 'Mateo Gómez Lara',
         examId: 'quimica_general_2026',
         examTitle: this.activeExamData.title,
-        status: 'forced_submission_cheat',
-        startedAt: Date.now() - 12 * 60 * 1000,
-        submittedAt: Date.now() - 5 * 60 * 1000,
-        currentQuestionIndex: 1,
-        answers: {
-          [this.activeExamData.questions[0]?.id || 'q0']: this.activeExamData.questions[0]?.correctAnswer || 0,
-        },
-        score: 20,
+        status: 'waiting',
+        joinedWaitingAt: Date.now() - 2 * 60 * 1000,
+        currentQuestionIndex: 0,
+        answers: {},
+        score: 0,
         maxScore: 100,
-        percentage: 20,
-        cheatWarningsCount: 3,
-        cheatLogs: [
-          {
-            timestamp: Date.now() - 10 * 60 * 1000,
-            reason: 'Cambio de pestaña / minimizado',
-            warningNumber: 1
-          },
-          {
-            timestamp: Date.now() - 8 * 60 * 1000,
-            reason: 'Cambio a navegador secundario o app externa',
-            warningNumber: 2
-          },
-          {
-            timestamp: Date.now() - 5 * 60 * 1000,
-            reason: 'Tercera infracción: Expulsión automática',
-            warningNumber: 3
-          }
-        ],
-        lastActive: Date.now() - 5 * 60 * 1000
+        percentage: 0,
+        cheatWarningsCount: 0,
+        cheatLogs: [],
+        lastActive: Date.now() - 10 * 1000
       }
     };
 

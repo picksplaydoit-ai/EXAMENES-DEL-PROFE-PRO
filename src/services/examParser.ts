@@ -1,44 +1,39 @@
-import { Question } from '../types';
+import { Question, QuestionType, ColumnPair } from '../types';
 
-export const SAMPLE_PLAIN_TEXT_EXAM = `PREGUNTA: ¿Qué tipo de enlace químico se forma entre un metal y un no metal por transferencia completa de electrones?
+export const SAMPLE_PLAIN_TEXT_EXAM = `-- TIPO: OPCION_MULTIPLE --
+PREGUNTA: ¿Qué tipo de enlace químico se forma entre un metal y un no metal por transferencia completa de electrones?
+IMAGEN: https://images.unsplash.com/photo-1532187863486-abf9dbad1b69?w=800&auto=format&fit=crop&q=80
 A) Enlace Covalente Polar
 B) Enlace Iónico (Electrovalente)
 C) Enlace Metálico
 D) Enlace Covalente Apolar
 CORRECTA: B
-RETROALIMENTACION: El enlace iónico se genera debido a la alta diferencia de electronegatividad entre metales y no metales, transfiriendo electrones y formando iones.
+RETROALIMENTACION: El enlace iónico resulta de la gran diferencia de electronegatividad, donde el metal cede electrones formando iones unidos por atracción electrostática.
 
-PREGUNTA: De acuerdo con la Ley de Conservación de la Materia de Lavoisier, ¿cuáles son los coeficientes estequiométricos para balancear la combustión del propano: _ C3H8 + _ O2 -> _ CO2 + _ H2O?
-A) 1, 5, 3, 4
-B) 1, 3, 3, 4
-C) 2, 7, 6, 8
-D) 1, 10, 3, 8
-CORRECTA: A
-RETROALIMENTACION: 1 C3H8 + 5 O2 -> 3 CO2 + 4 H2O produce 3 carbonos, 8 hidrógenos y 10 átomos de oxígeno en ambos miembros de la ecuación.
+-- TIPO: RELACIONAR --
+PREGUNTA: Relaciona cada sustancia química con su clasificación correspondiente:
+IMAGEN: https://images.unsplash.com/photo-1603126857599-f6e157fa2fe6?w=800&auto=format&fit=crop&q=80
+PAR: NaCl | Sal binaria iónica
+PAR: H2SO4 | Ácido oxácido
+PAR: He | Gas noble
+PAR: NaOH | Base o hidróxido
+RETROALIMENTACION: NaCl es sal neutra, H2SO4 es un ácido fuerte, He es un gas inerte con octeto/dueto completo, y NaOH es un álcali cáustico.
 
-PREGUNTA: Si una solución acuosa a 25°C tiene una concentración de iones hidronio [H3O+] = 1 x 10^-3 M, ¿cuál es su pH y cómo se clasifica?
+-- TIPO: ABIERTA --
+PREGUNTA: Explica brevemente el principio de conservación de la materia formulado por Antoine Lavoisier y su importancia al balancear reacciones.
+IMAGEN: https://images.unsplash.com/photo-1507668077129-56e32842fceb?w=800&auto=format&fit=crop&q=80
+RESPUESTA_MODELO: La materia no se crea ni se destruye, solo se transforma. La cantidad total de átomos en reactivos debe ser igual a la de productos.
+RETROALIMENTACION: En cualquier reacción química, la suma de las masas de las sustancias reaccionantes es exactamente igual a la suma de las masas de los productos.
+
+-- TIPO: OPCION_MULTIPLE --
+PREGUNTA: Si una solución acuosa a 25°C tiene una concentración [H3O+] = 1 x 10^-3 M, ¿cuál es su pH y cómo se clasifica?
+IMAGEN: https://images.unsplash.com/photo-1517048676732-d65bc937f952?w=800&auto=format&fit=crop&q=80
 A) pH = 11, solución fuertemente básica
 B) pH = 3, solución ácida
 C) pH = 7, solución neutra
 D) pH = -3, solución anfótera
 CORRECTA: B
-RETROALIMENTACION: pH = -log[H3O+] = -log(10^-3) = 3. Al ser menor a 7 a 25°C, la disolución es netamente ácida.
-
-PREGUNTA: ¿Cuántos protones y cuántos neutrones contiene el núcleo del átomo de carbono-14 (14_6 C)?
-A) 6 protones y 6 neutrones
-B) 8 protones y 6 neutrones
-C) 6 protones y 8 neutrones
-D) 14 protones y 0 neutrones
-CORRECTA: C
-RETROALIMENTACION: El número atómico Z es 6 (6 protones). La cantidad de neutrones es N = A - Z = 14 - 6 = 8 neutrones.
-
-PREGUNTA: ¿Cómo se denomina el cambio de estado de la materia en el cual una sustancia pasa directamente de fase sólida a gas sin pasar por líquido?
-A) Fusión
-B) Sublimación
-C) Condensación
-D) Evaporación
-CORRECTA: B
-RETROALIMENTACION: La sublimación es la transición directa de fase sólida a gas (ejemplo: dióxido de carbono sólido o hielo seco).`;
+RETROALIMENTACION: pH = -log[H3O+] = -log(10^-3) = 3. Todo pH menor a 7 a 25°C indica una disolución ácida.`;
 
 export interface ParseResult {
   questions: Question[];
@@ -56,13 +51,17 @@ export function parsePlainTextExam(text: string): ParseResult {
   // Normalize line endings
   const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-  // Split by "PREGUNTA:" (case insensitive)
-  const rawBlocks = normalized.split(/(?=^PREGUNTA\s*:)/gmi).map((b) => b.trim()).filter(Boolean);
+  // Split into blocks either by "-- TIPO:" or by "PREGUNTA:"
+  // Regex looks for either ^--\s*TIPO: or ^PREGUNTA\s*:
+  const rawBlocks = normalized
+    .split(/(?=^(?:--\s*TIPO\s*:|PREGUNTA\s*:))/gmi)
+    .map((b) => b.trim())
+    .filter(Boolean);
 
   if (rawBlocks.length === 0) {
     return {
       questions: [],
-      errors: ['No se detectó la etiqueta "PREGUNTA:". Asegúrate de que cada pregunta inicie con PREGUNTA: [Texto].']
+      errors: ['No se detectaron preguntas. Asegúrate de incluir etiquetas "PREGUNTA:" o "-- TIPO: --".']
     };
   }
 
@@ -70,15 +69,40 @@ export function parsePlainTextExam(text: string): ParseResult {
     const qNum = index + 1;
     const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
 
+    let explicitType: QuestionType | null = null;
     let questionText = '';
-    const optionsMap: Record<string, string> = {};
+    let imageUrl = '';
     let correctLetter = '';
+    let referenceAnswer = '';
     let explanationText = '';
+    const optionsMap: Record<string, string> = {};
+    const pairs: ColumnPair[] = [];
 
-    let currentSection: 'question' | 'explanation' | 'none' = 'none';
+    let currentSection: 'question' | 'explanation' | 'reference' | 'none' = 'none';
 
     for (const line of lines) {
-      // PREGUNTA:
+      // -- TIPO: OPCION_MULTIPLE / ABIERTA / RELACIONAR --
+      const typeMatch = line.match(/^--\s*TIPO\s*:\s*([A-Za-z_]+)\s*--?$/i);
+      if (typeMatch) {
+        const rawType = typeMatch[1].toLowerCase();
+        if (rawType.includes('opcion') || rawType.includes('multiple')) {
+          explicitType = 'opcion_multiple';
+        } else if (rawType.includes('abierta') || rawType.includes('desarrollo')) {
+          explicitType = 'abierta';
+        } else if (rawType.includes('relacion') || rawType.includes('columna') || rawType.includes('parear')) {
+          explicitType = 'relacionar';
+        }
+        continue;
+      }
+
+      // IMAGEN: https://...
+      const imgMatch = line.match(/^(?:IMAGEN|IMAGE|IMG)\s*:\s*(https?:\/\/[^\s]+)$/i);
+      if (imgMatch) {
+        imageUrl = imgMatch[1].trim();
+        continue;
+      }
+
+      // PREGUNTA: ...
       const qMatch = line.match(/^PREGUNTA\s*:\s*(.+)$/i);
       if (qMatch) {
         questionText = qMatch[1].trim();
@@ -86,7 +110,19 @@ export function parsePlainTextExam(text: string): ParseResult {
         continue;
       }
 
-      // OPTION: A), B), C), D) or A. B. C. D.
+      // PAR: Elemento A | Elemento B
+      const pairMatch = line.match(/^(?:PAR|PAIR|COLUMNA)\s*:\s*(.+?)\s*\|\s*(.+)$/i);
+      if (pairMatch) {
+        currentSection = 'none';
+        pairs.push({
+          id: `pair_${pairs.length + 1}`,
+          left: pairMatch[1].trim(),
+          right: pairMatch[2].trim()
+        });
+        continue;
+      }
+
+      // OPTION: A) Opción 1, B) Opción 2...
       const optMatch = line.match(/^([A-Da-d])[\)\.\:\-]\s*(.+)$/);
       if (optMatch) {
         currentSection = 'none';
@@ -95,11 +131,19 @@ export function parsePlainTextExam(text: string): ParseResult {
         continue;
       }
 
-      // CORRECTA:
+      // CORRECTA: A/B/C/D
       const correctMatch = line.match(/^(?:CORRECTA|RESPUESTA|RESPUESTA CORRECTA)\s*:\s*([A-Da-d0-9])/i);
       if (correctMatch) {
         currentSection = 'none';
         correctLetter = correctMatch[1].toUpperCase();
+        continue;
+      }
+
+      // RESPUESTA_MODELO / RESPUESTA_ESPERADA:
+      const refMatch = line.match(/^(?:RESPUESTA_MODELO|RESPUESTA_ESPERADA|CRITERIO)\s*:\s*(.*)$/i);
+      if (refMatch) {
+        referenceAnswer = refMatch[1].trim();
+        currentSection = 'reference';
         continue;
       }
 
@@ -111,77 +155,110 @@ export function parsePlainTextExam(text: string): ParseResult {
         continue;
       }
 
-      // Multi-line continuation
+      // Continuation lines
       if (currentSection === 'question') {
         questionText += ' ' + line;
       } else if (currentSection === 'explanation') {
         explanationText += ' ' + line;
+      } else if (currentSection === 'reference') {
+        referenceAnswer += ' ' + line;
       }
     }
 
-    // Validation
     if (!questionText) {
-      errors.push(`Bloque #${qNum}: Falta el texto de la pregunta (PREGUNTA:).`);
+      errors.push(`Bloque #${qNum}: Falta el enunciado de la pregunta (PREGUNTA:).`);
       return;
     }
 
-    const optionLetters = ['A', 'B', 'C', 'D'];
-    const availableOptions: string[] = [];
-
-    // Collect available options in order A, B, C, D
-    for (const l of optionLetters) {
-      if (optionsMap[l]) {
-        availableOptions.push(optionsMap[l]);
+    // Determine type if not explicit
+    let detectedType: QuestionType = explicitType || 'opcion_multiple';
+    if (!explicitType) {
+      if (pairs.length >= 2) {
+        detectedType = 'relacionar';
+      } else if (Object.keys(optionsMap).length >= 2) {
+        detectedType = 'opcion_multiple';
+      } else {
+        detectedType = 'abierta';
       }
     }
 
-    if (availableOptions.length < 2) {
-      errors.push(`Pregunta #${qNum} ("${questionText.slice(0, 30)}..."): Debe tener al menos 2 opciones (A, B, C, D). Se encontraron ${availableOptions.length}.`);
-      return;
-    }
+    // Process per question type
+    if (detectedType === 'relacionar') {
+      if (pairs.length < 2) {
+        errors.push(`Pregunta #${qNum} (Relacionar): Se requieren al menos 2 pares con formato "PAR: Izquierda | Derecha".`);
+        return;
+      }
 
-    // Map correct answer index
-    let correctIndex = -1;
-    if (correctLetter) {
-      if (['A', 'B', 'C', 'D'].includes(correctLetter)) {
-        correctIndex = correctLetter.charCodeAt(0) - 65;
-      } else {
-        const num = parseInt(correctLetter, 10);
-        if (!isNaN(num) && num >= 1 && num <= availableOptions.length) {
-          correctIndex = num - 1;
+      questions.push({
+        id: `q_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 6)}`,
+        type: 'relacionar',
+        topic: 'Relación de Conceptos',
+        question: questionText,
+        imageUrl: imageUrl || undefined,
+        pairs,
+        explanation: explanationText || 'Relaciona cada elemento de la izquierda con su par exacto a la derecha.',
+        points: 25
+      });
+    } else if (detectedType === 'abierta') {
+      questions.push({
+        id: `q_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 6)}`,
+        type: 'abierta',
+        topic: 'Pregunta de Desarrollo',
+        question: questionText,
+        imageUrl: imageUrl || undefined,
+        referenceAnswer: referenceAnswer || undefined,
+        explanation: explanationText || referenceAnswer || 'Pregunta abierta evaluada con base en criterios pedagógicos.',
+        points: 25
+      });
+    } else {
+      // OPCION_MULTIPLE
+      const optionLetters = ['A', 'B', 'C', 'D'];
+      const availableOptions: string[] = [];
+
+      for (const l of optionLetters) {
+        if (optionsMap[l]) availableOptions.push(optionsMap[l]);
+      }
+
+      if (availableOptions.length < 2) {
+        errors.push(`Pregunta #${qNum} (Opción Múltiple): Debe tener al menos 2 opciones (A, B).`);
+        return;
+      }
+
+      let correctIndex = -1;
+      if (correctLetter) {
+        if (['A', 'B', 'C', 'D'].includes(correctLetter)) {
+          correctIndex = correctLetter.charCodeAt(0) - 65;
+        } else {
+          const num = parseInt(correctLetter, 10);
+          if (!isNaN(num) && num >= 1 && num <= availableOptions.length) {
+            correctIndex = num - 1;
+          }
         }
       }
+
+      if (correctIndex < 0 || correctIndex >= availableOptions.length) {
+        errors.push(`Pregunta #${qNum}: La opción correcta "${correctLetter || 'vacía'}" no es válida para las opciones disponibles.`);
+        return;
+      }
+
+      questions.push({
+        id: `q_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 6)}`,
+        type: 'opcion_multiple',
+        topic: 'Opción Múltiple',
+        question: questionText,
+        imageUrl: imageUrl || undefined,
+        options: availableOptions,
+        correctAnswer: correctIndex,
+        explanation: explanationText || `La respuesta correcta es la opción ${String.fromCharCode(65 + correctIndex)}: ${availableOptions[correctIndex]}.`,
+        points: 25
+      });
     }
-
-    if (correctIndex < 0 || correctIndex >= availableOptions.length) {
-      errors.push(`Pregunta #${qNum}: La opción correcta "${correctLetter || 'vacía'}" no es válida. Debe ser A, B, C o D.`);
-      return;
-    }
-
-    // Topic extraction or default
-    let topic = 'Química General';
-    if (questionText.toLowerCase().includes('enlace')) topic = 'Enlaces Químicos';
-    else if (questionText.toLowerCase().includes('balance') || questionText.toLowerCase().includes('combustion')) topic = 'Estequiometría';
-    else if (questionText.toLowerCase().includes('ph') || questionText.toLowerCase().includes('acido')) topic = 'Ácidos y Bases';
-    else if (questionText.toLowerCase().includes('atomo') || questionText.toLowerCase().includes('proton')) topic = 'Estructura Atómica';
-    else if (questionText.toLowerCase().includes('estado') || questionText.toLowerCase().includes('fase')) topic = 'Fases y Materia';
-
-    questions.push({
-      id: `q_${Date.now()}_${index}_${Math.random().toString(36).substring(2, 6)}`,
-      topic,
-      question: questionText,
-      options: availableOptions,
-      correctAnswer: correctIndex,
-      explanation: explanationText || `La respuesta correcta es la opción ${String.fromCharCode(65 + correctIndex)}: ${availableOptions[correctIndex]}.`,
-      points: 20 // will be scaled dynamically
-    });
   });
 
-  // Calculate dynamic point distribution so total is 100 points
+  // Calculate dynamic point distribution to equal 100 points
   if (questions.length > 0) {
     const ptsPerQ = Math.round(100 / questions.length);
     questions.forEach((q, idx) => {
-      // Last question compensates rounding to ensure exactly 100
       if (idx === questions.length - 1) {
         q.points = 100 - ptsPerQ * (questions.length - 1);
       } else {

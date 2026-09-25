@@ -22,9 +22,16 @@ import {
   FileText,
   QrCode,
   Layers,
-  RefreshCw
+  RefreshCw,
+  Play,
+  Pause,
+  Timer,
+  Hourglass,
+  ArrowRightLeft,
+  AlignLeft,
+  Check
 } from 'lucide-react';
-import { StudentExamState, Question } from '../types';
+import { StudentExamState, Question, GlobalSessionState } from '../types';
 import { firebaseService, ExamDataPayload } from '../services/firebaseService';
 import { ExamLoaderModal } from './ExamLoaderModal';
 import { QRCodeModal } from './QRCodeModal';
@@ -41,16 +48,23 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [students, setStudents] = useState<Record<string, StudentExamState>>({});
   const [selectedStudentForModal, setSelectedStudentForModal] = useState<StudentExamState | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'in_progress' | 'cheated' | 'completed'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'waiting' | 'in_progress' | 'cheated' | 'completed'>('all');
   const [lastIncidentStudent, setLastIncidentStudent] = useState<{ name: string; time: number; warnings: number } | null>(null);
 
-  // Active Exam State
+  // Active Exam & Global Session State
   const [examData, setExamData] = useState<ExamDataPayload>(firebaseService.getActiveExam());
+  const [globalSession, setGlobalSession] = useState<GlobalSessionState>(firebaseService.getGlobalSession());
+  const [customDurationMinutes, setCustomDurationMinutes] = useState<number>(20);
+  const [remainingSessionSeconds, setRemainingSessionSeconds] = useState<number>(20 * 60);
+
+  // Modals & Confirmation States
   const [isExamLoaderOpen, setIsExamLoaderOpen] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
+  const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
   const [clearSuccessToast, setClearSuccessToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Subscribe to real-time student changes & exam changes
+  // Subscribe to real-time student changes, exam changes & global session
   useEffect(() => {
     const unsubStudents = firebaseService.subscribeToStudents((updatedStudents) => {
       setStudents(updatedStudents);
@@ -83,11 +97,35 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       setExamData(data);
     });
 
+    const unsubSession = firebaseService.subscribeToGlobalSession((session) => {
+      setGlobalSession(session);
+      if (session.durationMinutes) {
+        setCustomDurationMinutes(session.durationMinutes);
+      }
+    });
+
     return () => {
       unsubStudents();
       unsubExam();
+      unsubSession();
     };
   }, []);
+
+  // Synchronized countdown display on teacher side
+  useEffect(() => {
+    if (globalSession.status !== 'active') return;
+
+    const tick = () => {
+      if (globalSession.endsAt) {
+        const diff = Math.max(0, Math.floor((globalSession.endsAt - Date.now()) / 1000));
+        setRemainingSessionSeconds(diff);
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [globalSession.status, globalSession.endsAt]);
 
   const studentList = Object.values(students);
   const activeQuestions = examData.questions || [];
@@ -95,6 +133,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   // Metrics
   const totalStudents = studentList.length;
+  const waitingStudents = studentList.filter((s) => s.status === 'waiting');
   const inProgressCount = studentList.filter((s) => s.status === 'in_progress').length;
   const completedCount = studentList.filter((s) => s.status === 'submitted').length;
   const cheatedCount = studentList.filter((s) => s.status === 'forced_submission_cheat' || s.cheatWarningsCount >= 3).length;
@@ -111,6 +150,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
     if (!matchesSearch) return false;
 
+    if (statusFilter === 'waiting') return st.status === 'waiting';
     if (statusFilter === 'in_progress') return st.status === 'in_progress';
     if (statusFilter === 'cheated') return st.cheatWarningsCount > 0;
     if (statusFilter === 'completed') return st.status === 'submitted' || st.status === 'forced_submission_cheat';
@@ -118,10 +158,28 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     return true;
   });
 
+  const showNotification = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  // Start Exam For Everyone
+  const handleStartExamForEveryone = async () => {
+    const duration = Math.max(1, customDurationMinutes || 20);
+    await firebaseService.startExamForEveryone(duration);
+    showNotification(`🚀 ¡Examen iniciado para todos! Temporizador global de ${duration} minutos corriendo.`);
+  };
+
+  // Reset Session To Waiting Room
+  const handleResetSessionToWaitingRoom = async () => {
+    await firebaseService.resetSessionToWaitingRoom();
+    showNotification('⏸️ Examen pausado. La sala ha vuelto al modo Espera.');
+  };
+
   // Export to CSV
   const handleExportCSV = () => {
     if (studentList.length === 0) {
-      alert('No hay alumnos registrados para exportar.');
+      showNotification('No hay alumnos registrados para exportar.');
       return;
     }
 
@@ -129,7 +187,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     const rows = studentList.map((st) => [
       `"${st.matricula}"`,
       `"${st.fullName}"`,
-      `"${st.status === 'forced_submission_cheat' ? 'Expulsado por Faltas' : st.status === 'submitted' ? 'Completado' : 'En Curso'}"`,
+      `"${st.status === 'forced_submission_cheat' ? 'Expulsado por Faltas' : st.status === 'submitted' ? 'Completado' : st.status === 'waiting' ? 'En Sala de Espera' : 'En Curso'}"`,
       st.score,
       st.maxScore || totalExamPoints,
       `${st.percentage}%`,
@@ -149,45 +207,54 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   };
 
   const handleResetStudent = async (studentId: string) => {
-    if (confirm(`¿Reiniciar el examen de este alumno? Podrá volver a ingresar desde cero.`)) {
-      await firebaseService.resetStudentAttempt(studentId);
-      if (selectedStudentForModal?.id === studentId) {
-        setSelectedStudentForModal(null);
-      }
+    await firebaseService.resetStudentAttempt(studentId);
+    if (selectedStudentForModal?.id === studentId) {
+      setSelectedStudentForModal(null);
     }
+    showNotification(`Intento del alumno ${studentId} reiniciado.`);
   };
 
   const handleDeleteStudent = async (studentId: string) => {
-    if (confirm(`¿Eliminar este registro permanentemente?`)) {
-      await firebaseService.deleteStudent(studentId);
-      if (selectedStudentForModal?.id === studentId) {
-        setSelectedStudentForModal(null);
-      }
+    await firebaseService.deleteStudent(studentId);
+    if (selectedStudentForModal?.id === studentId) {
+      setSelectedStudentForModal(null);
     }
+    showNotification(`Registro de ${studentId} eliminado.`);
   };
 
   // CONTROL DE BASE DE DATOS: Limpiar / Reiniciar Resultados
-  const handleClearDatabaseResults = async () => {
-    const confirmation = confirm(
-      '⚠️ ¿Estás seguro de LIMPIAR Y REINICIAR los resultados de todos los alumnos?\n\n' +
-      'Esta acción borrará los intentos y notas de los alumnos anteriores en Firebase Realtime Database para que puedas aplicar el examen a un NUEVO GRUPO.\n\n' +
-      '(Las preguntas del examen NO se borrarán).'
-    );
-
-    if (confirmation) {
-      await firebaseService.clearAllStudents();
-      setSelectedStudentForModal(null);
-      setClearSuccessToast(true);
-      setTimeout(() => setClearSuccessToast(false), 3500);
-    }
+  const handleConfirmClearDatabase = async () => {
+    await firebaseService.clearAllStudents();
+    setSelectedStudentForModal(null);
+    setIsClearConfirmOpen(false);
+    setClearSuccessToast(true);
+    setTimeout(() => setClearSuccessToast(false), 4000);
   };
 
   const handleSeedDemo = () => {
     firebaseService.seedDemoStudents();
+    showNotification('Alumnos de prueba generados en la base de datos.');
+  };
+
+  const formatSeconds = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-20 right-4 z-50 bg-indigo-600 border border-indigo-400 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center space-x-3 animate-in fade-in slide-in-from-top-2">
+          <CheckCircle2 className="w-5 h-5 shrink-0 text-indigo-200" />
+          <span className="text-xs sm:text-sm font-bold">{toastMessage}</span>
+          <button type="button" onClick={() => setToastMessage(null)} className="text-indigo-200 hover:text-white ml-2">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Toast Alert when database reset */}
       {clearSuccessToast && (
         <div className="bg-emerald-600 border border-emerald-400 text-white p-4 rounded-2xl shadow-xl flex items-center justify-between animate-in fade-in">
@@ -237,6 +304,135 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           </button>
         </div>
       )}
+
+      {/* ========================================================
+          1. CONTROL DE SALA DE ESPERA KAHOOT & TEMPORIZADOR GLOBAL
+          ======================================================== */}
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-indigo-950/90 via-purple-950/90 to-slate-900/90 border-2 border-indigo-500/40 p-6 shadow-2xl backdrop-blur-xl">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-2">
+            <div className="flex items-center space-x-2">
+              <span className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider flex items-center space-x-1.5 ${
+                globalSession.status === 'active'
+                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 animate-pulse'
+                  : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${globalSession.status === 'active' ? 'bg-emerald-400 animate-ping' : 'bg-indigo-400'}`} />
+                <span>
+                  {globalSession.status === 'active' ? 'Examen en Vivo (Cronómetro Corriendo)' : 'Sala de Espera Kahoot (Abierta)'}
+                </span>
+              </span>
+              <span className="text-xs text-slate-400 font-mono">
+                {waitingStudents.length} alumno(s) formado(s)
+              </span>
+            </div>
+
+            <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+              Control de Inicio & Temporizador Sincronizado
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-300 max-w-2xl">
+              Los alumnos entran con su nombre y se forman en la sala de espera. Al presionar <strong>"Comenzar Examen para Todos"</strong>, todos los dispositivos inician la prueba con el temporizador al unísono.
+            </p>
+          </div>
+
+          {/* Timer Setup & Start CTA */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+            {globalSession.status === 'waiting_room' ? (
+              <>
+                <div className="bg-slate-900/90 border border-slate-700 rounded-2xl p-2.5 flex items-center space-x-2">
+                  <Clock className="w-5 h-5 text-pink-400 shrink-0 ml-1" />
+                  <div className="flex flex-col">
+                    <span className="text-[10px] uppercase font-bold text-slate-400">Tiempo de Prueba</span>
+                    <div className="flex items-center space-x-1.5">
+                      <input
+                        type="number"
+                        min="1"
+                        max="180"
+                        value={customDurationMinutes}
+                        onChange={(e) => setCustomDurationMinutes(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="w-16 bg-slate-800 border border-slate-600 rounded-lg px-2 py-0.5 text-center text-sm font-bold text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                      />
+                      <span className="text-xs text-slate-300 font-bold">min</span>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleStartExamForEveryone}
+                  className="px-6 py-3.5 rounded-2xl font-black text-sm text-white bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600 hover:from-emerald-400 hover:to-indigo-500 shadow-xl shadow-emerald-500/25 transition-all flex items-center justify-center space-x-2.5 transform active:scale-95"
+                >
+                  <Play className="w-5 h-5 fill-white" />
+                  <span>Comenzar Examen para Todos</span>
+                </button>
+              </>
+            ) : (
+              <div className="flex flex-col sm:flex-row items-center gap-3">
+                {/* Active Global Clock */}
+                <div className="bg-slate-900 border-2 border-indigo-500/50 rounded-2xl px-5 py-2.5 flex items-center space-x-3 text-white shadow-inner">
+                  <Hourglass className="w-5 h-5 text-pink-400 animate-spin-slow" />
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block">Tiempo Restante</span>
+                    <span className="text-xl font-mono font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-indigo-300">
+                      {formatSeconds(remainingSessionSeconds)}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleResetSessionToWaitingRoom}
+                  className="px-4 py-3 rounded-2xl font-bold text-xs text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-all flex items-center space-x-2"
+                >
+                  <Pause className="w-4 h-4 text-amber-400" />
+                  <span>Pausar / Volver a Sala</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Live Roster of Formed Students in Waiting Room */}
+        <div className="mt-5 pt-4 border-t border-indigo-500/20">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-extrabold uppercase tracking-wider text-indigo-300 flex items-center space-x-2">
+              <Users className="w-4 h-4" />
+              <span>Alumnos formados en la Sala de Espera ({waitingStudents.length})</span>
+            </span>
+            <span className="text-[11px] text-slate-400">
+              {waitingStudents.length === 0 ? 'Esperando a que los alumnos ingresen su matrícula...' : 'Listos para iniciar'}
+            </span>
+          </div>
+
+          {waitingStudents.length > 0 ? (
+            <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto pr-1">
+              {waitingStudents.map((st) => (
+                <div
+                  key={st.id}
+                  className="bg-indigo-950/70 border border-indigo-500/40 rounded-xl px-3 py-1.5 flex items-center space-x-2 shadow-sm animate-in fade-in"
+                >
+                  <div className="w-5 h-5 rounded-lg bg-indigo-600 text-[10px] font-bold text-white flex items-center justify-center">
+                    {st.fullName.charAt(0).toUpperCase()}
+                  </div>
+                  <span className="text-xs font-semibold text-white">{st.fullName}</span>
+                  <span className="text-[10px] font-mono text-indigo-300">({st.matricula})</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400 flex items-center justify-between">
+              <span>Comparte el Código QR o el enlace para que los alumnos ingresen su nombre y aparezcan aquí al instante.</span>
+              <button
+                type="button"
+                onClick={() => setIsQrModalOpen(true)}
+                className="text-indigo-400 hover:text-indigo-300 underline font-semibold ml-2 shrink-0"
+              >
+                Abrir QR
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* EXAM CONTROL & QR COMMAND BAR */}
       <div className="bg-gradient-to-br from-slate-800/90 via-slate-850 to-slate-900 rounded-3xl border border-slate-700/80 p-5 sm:p-6 shadow-2xl backdrop-blur-md">
@@ -289,7 +485,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             {/* Clear Database Results */}
             <button
               type="button"
-              onClick={handleClearDatabaseResults}
+              onClick={() => setIsClearConfirmOpen(true)}
               title="Borra los intentos anteriores de los alumnos para iniciar con un nuevo grupo"
               className="px-3.5 py-2.5 rounded-xl font-bold text-xs text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-all flex items-center space-x-1.5"
             >
@@ -435,6 +631,17 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           </button>
           <button
             type="button"
+            onClick={() => setStatusFilter('waiting')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+              statusFilter === 'waiting'
+                ? 'bg-amber-600 text-white'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            En Sala ({waitingStudents.length})
+          </button>
+          <button
+            type="button"
             onClick={() => setStatusFilter('in_progress')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
               statusFilter === 'in_progress'
@@ -532,6 +739,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                           <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm shrink-0 ${
                             st.status === 'forced_submission_cheat'
                               ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                              : st.status === 'waiting'
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                               : st.status === 'submitted'
                               ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
                               : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
@@ -551,7 +760,12 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
                       {/* Status */}
                       <td className="py-4 px-4">
-                        {st.status === 'in_progress' ? (
+                        {st.status === 'waiting' ? (
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse mr-1.5" />
+                            En Sala de Espera
+                          </span>
+                        ) : st.status === 'in_progress' ? (
                           <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping mr-1.5" />
                             En Examen
@@ -751,9 +965,92 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
                 <div className="space-y-3">
                   {activeQuestions.map((q, idx) => {
-                    const pickedIdx = selectedStudentForModal.answers ? selectedStudentForModal.answers[q.id] : undefined;
+                    const studentAns = selectedStudentForModal.answers ? selectedStudentForModal.answers[q.id] : undefined;
+                    const hasAnswered = studentAns !== undefined && studentAns !== null;
+
+                    if (q.type === 'abierta') {
+                      const text = typeof studentAns === 'string' ? studentAns : '';
+                      const isSubstantial = text.trim().length >= 10;
+
+                      return (
+                        <div key={q.id} className="p-3.5 rounded-xl bg-slate-800/70 border border-slate-700 text-xs space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-white flex items-center space-x-1.5">
+                              <AlignLeft className="w-3.5 h-3.5 text-purple-400" />
+                              <span>{idx + 1}. {q.question}</span>
+                            </span>
+                            {hasAnswered ? (
+                              <span className="text-purple-400 font-bold shrink-0 ml-2">Respuesta Abierta (+{isSubstantial ? q.points : 0}pts)</span>
+                            ) : (
+                              <span className="text-slate-500 italic shrink-0 ml-2">Sin responder</span>
+                            )}
+                          </div>
+
+                          {hasAnswered && (
+                            <div className="text-[11px] text-slate-300 space-y-1.5 pt-2 border-t border-slate-700/60 font-mono">
+                              <div className="bg-slate-900/80 p-2.5 rounded-lg border border-slate-700">
+                                <span className="text-[10px] text-slate-400 uppercase font-bold block mb-0.5">Texto del alumno:</span>
+                                <p className="text-slate-200">{text || '(Respuesta vacía)'}</p>
+                              </div>
+                              {(q.referenceAnswer || q.explanation) && (
+                                <div className="bg-emerald-950/30 p-2.5 rounded-lg border border-emerald-500/30 text-emerald-300">
+                                  <span className="text-[10px] text-emerald-400 uppercase font-bold block mb-0.5">Criterio / Respuesta Modelo:</span>
+                                  <p>{q.referenceAnswer || q.explanation}</p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    if (q.type === 'relacionar') {
+                      const matches: Record<string, string> = studentAns || {};
+                      const pairs = q.pairs || [];
+                      let correctPairsCount = 0;
+                      pairs.forEach((p) => {
+                        if (matches[p.id] === p.right) correctPairsCount++;
+                      });
+                      const pairScore = pairs.length > 0 ? Math.round((q.points * correctPairsCount) / pairs.length) : 0;
+
+                      return (
+                        <div key={q.id} className="p-3.5 rounded-xl bg-slate-800/70 border border-slate-700 text-xs space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-white flex items-center space-x-1.5">
+                              <ArrowRightLeft className="w-3.5 h-3.5 text-pink-400" />
+                              <span>{idx + 1}. {q.question}</span>
+                            </span>
+                            {hasAnswered ? (
+                              <span className="text-pink-400 font-bold shrink-0 ml-2">{correctPairsCount}/{pairs.length} pares ({pairScore}pts)</span>
+                            ) : (
+                              <span className="text-slate-500 italic shrink-0 ml-2">Sin responder</span>
+                            )}
+                          </div>
+
+                          {hasAnswered && (
+                            <div className="text-[11px] text-slate-300 space-y-1.5 pt-2 border-t border-slate-700/60 font-mono">
+                              {pairs.map((p) => {
+                                const userRight = matches[p.id];
+                                const isMatchRight = userRight === p.right;
+                                return (
+                                  <div key={p.id} className="flex items-center justify-between p-1.5 rounded bg-slate-900/60 border border-slate-800">
+                                    <span className="text-slate-300 font-bold">{p.left}:</span>
+                                    <span className={isMatchRight ? 'text-emerald-400' : 'text-rose-400'}>
+                                      {userRight || '(No emparejado)'}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+
+                    // opcion_multiple
+                    const options = q.options || [];
+                    const pickedIdx = studentAns as number | undefined;
                     const isCorrect = pickedIdx === q.correctAnswer;
-                    const hasAnswered = pickedIdx !== undefined;
 
                     return (
                       <div key={q.id} className="p-3.5 rounded-xl bg-slate-800/70 border border-slate-700 text-xs space-y-2">
@@ -775,11 +1072,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         {hasAnswered && (
                           <div className="text-[11px] text-slate-300 space-y-1 pt-1 border-t border-slate-700/60 font-mono">
                             <p>
-                              • Marcó: <span className={isCorrect ? 'text-emerald-400' : 'text-rose-400'}>{q.options[pickedIdx]}</span>
+                              • Marcó: <span className={isCorrect ? 'text-emerald-400' : 'text-rose-400'}>{pickedIdx !== undefined && options[pickedIdx] ? options[pickedIdx] : 'Opción no registrada'}</span>
                             </p>
                             {!isCorrect && (
                               <p className="text-emerald-400">
-                                • Correcta era: {q.options[q.correctAnswer]}
+                                • Correcta era: {q.correctAnswer !== undefined && options[q.correctAnswer] ? options[q.correctAnswer] : 'N/A'}
                               </p>
                             )}
                           </div>
@@ -828,6 +1125,43 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         onClose={() => setIsQrModalOpen(false)}
         examTitle={examData.title}
       />
+
+      {/* CONFIRM CLEAR DATABASE MODAL */}
+      {isClearConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-in fade-in">
+          <div className="max-w-md w-full bg-slate-900 border border-amber-500/40 rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center">
+              <RefreshCw className="w-6 h-6 animate-spin-slow" />
+            </div>
+            <div>
+              <h3 className="text-lg font-black text-white">¿Reiniciar Base de Datos para Nuevo Grupo?</h3>
+              <p className="text-xs text-slate-300 mt-2 leading-relaxed">
+                Esta acción eliminará el historial, notas y faltas de los alumnos anteriores en <strong>Firebase Realtime Database</strong> y devolverá la sesión a la <strong>Sala de Espera</strong>.
+              </p>
+              <p className="text-[11px] text-amber-300 font-semibold mt-2">
+                ✓ Tus preguntas del examen NO se borrarán. El nuevo grupo podrá entrar de inmediato.
+              </p>
+            </div>
+            <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setIsClearConfirmOpen(false)}
+                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmClearDatabase}
+                className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-amber-600 hover:bg-amber-500 shadow-lg shadow-amber-600/30 transition-all flex items-center space-x-2"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Confirmar y Reiniciar</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
