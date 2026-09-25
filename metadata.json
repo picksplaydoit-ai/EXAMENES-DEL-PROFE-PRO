@@ -1,0 +1,6 @@
+{
+  "name": "QuímicaQuiz Anti-Trampas & Monitor en Vivo",
+  "description": "Plataforma de exámenes de química con detector anti-trampas por cambio de pestañas y panel en vivo para profesores sincronizado con Firebase Realtime Database.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
