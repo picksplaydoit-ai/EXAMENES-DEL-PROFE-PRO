@@ -1,0 +1,159 @@
+{
+  "entities": {
+    "Exam": {
+      "title": "Exam",
+      "description": "Examen interactivo con reactivos, tipos de pregunta y metadatos",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Título descriptivo del examen"
+        },
+        "questions": {
+          "type": "array",
+          "description": "Lista de preguntas con opciones, columnas o respuestas abiertas"
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Marca de tiempo de la última modificación"
+        }
+      },
+      "required": ["title", "questions"]
+    },
+    "GlobalSession": {
+      "title": "GlobalSession",
+      "description": "Estado sincronizado de la sala de espera Kahoot y temporizador global",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["waiting_room", "active", "finished"],
+          "description": "Estado de la sala de espera o examen activo"
+        },
+        "durationMinutes": {
+          "type": "number",
+          "description": "Duración total del examen en minutos"
+        },
+        "startedAt": {
+          "type": "number",
+          "description": "Marca de tiempo en milisegundos cuando inició el examen"
+        },
+        "endsAt": {
+          "type": "number",
+          "description": "Marca de tiempo en milisegundos cuando finaliza el examen"
+        },
+        "title": {
+          "type": "string",
+          "description": "Título del examen"
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Marca de tiempo de última actualización"
+        }
+      },
+      "required": ["status", "durationMinutes"]
+    },
+    "StudentSubmission": {
+      "title": "StudentSubmission",
+      "description": "Registro de progreso, calificación provisional y faltas anti-trampas del alumno",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Matrícula o identificador único del estudiante"
+        },
+        "matricula": {
+          "type": "string",
+          "description": "Código o matrícula del alumno"
+        },
+        "fullName": {
+          "type": "string",
+          "description": "Nombre completo del estudiante"
+        },
+        "examId": {
+          "type": "string",
+          "description": "Identificador del examen"
+        },
+        "examTitle": {
+          "type": "string",
+          "description": "Título del examen"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["waiting", "in_progress", "submitted", "forced_submission_cheat"],
+          "description": "Estado del alumno en la prueba"
+        },
+        "currentQuestionIndex": {
+          "type": "number",
+          "description": "Índice de la pregunta actual"
+        },
+        "answers": {
+          "type": "object",
+          "description": "Respuestas marcadas o redactadas por el alumno"
+        },
+        "score": {
+          "type": "number",
+          "description": "Puntaje acumulado obtenido"
+        },
+        "maxScore": {
+          "type": "number",
+          "description": "Puntaje máximo de la prueba"
+        },
+        "percentage": {
+          "type": "number",
+          "description": "Porcentaje de aprovechamiento obtenido"
+        },
+        "cheatWarningsCount": {
+          "type": "number",
+          "description": "Cantidad de faltas por cambio de ventana acumuladas"
+        },
+        "cheatLogs": {
+          "type": "array",
+          "description": "Historial detallado de eventos de cambio de pestaña"
+        },
+        "lastActive": {
+          "type": "number",
+          "description": "Marca de tiempo de la última actividad"
+        }
+      },
+      "required": ["matricula", "fullName", "status"]
+    },
+    "ConnectionProbe": {
+      "title": "ConnectionProbe",
+      "description": "Sonda de verificación de conexión activa con Firestore",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "Estado de conexión"
+        }
+      }
+    }
+  },
+  "firestore": {
+    "/test/{docId}": {
+      "schema": {
+        "$ref": "#/entities/ConnectionProbe"
+      },
+      "description": "Documento de sonda para validar la conectividad del cliente con Firestore"
+    },
+    "/exams/{examId}": {
+      "schema": {
+        "$ref": "#/entities/Exam"
+      },
+      "description": "Documento con el título y las preguntas del examen"
+    },
+    "/exams/{examId}/session/current": {
+      "schema": {
+        "$ref": "#/entities/GlobalSession"
+      },
+      "description": "Estado de la sala de espera Kahoot y cuenta regresiva compartida"
+    },
+    "/exams/{examId}/students/{studentId}": {
+      "schema": {
+        "$ref": "#/entities/StudentSubmission"
+      },
+      "description": "Registro en tiempo real de cada alumno para el proctoring en vivo"
+    }
+  }
+}

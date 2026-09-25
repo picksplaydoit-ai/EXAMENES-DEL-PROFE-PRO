@@ -21,6 +21,7 @@ export const FirebaseModal: React.FC<FirebaseModalProps> = ({
   const [storageBucket, setStorageBucket] = useState('');
   const [messagingSenderId, setMessagingSenderId] = useState('');
   const [appId, setAppId] = useState('');
+  const [firestoreDatabaseId, setFirestoreDatabaseId] = useState('');
   
   const [rawJsonInput, setRawJsonInput] = useState('');
   const [useRawJson, setUseRawJson] = useState(false);
@@ -38,6 +39,7 @@ export const FirebaseModal: React.FC<FirebaseModalProps> = ({
         setStorageBucket(current.storageBucket || '');
         setMessagingSenderId(current.messagingSenderId || '');
         setAppId(current.appId || '');
+        setFirestoreDatabaseId(current.firestoreDatabaseId || '');
         setRawJsonInput(JSON.stringify(current, null, 2));
       }
     }
@@ -47,7 +49,6 @@ export const FirebaseModal: React.FC<FirebaseModalProps> = ({
 
   const handleParseRawJson = () => {
     try {
-      // Clean possible "const firebaseConfig = { ... };"
       let clean = rawJsonInput.trim();
       if (clean.includes('{') && clean.includes('}')) {
         const start = clean.indexOf('{');
@@ -55,8 +56,6 @@ export const FirebaseModal: React.FC<FirebaseModalProps> = ({
         clean = clean.substring(start, end + 1);
       }
       
-      // Replace unquoted keys if necessary or parse standard JSON
-      // Handle JS object format where keys might not be double-quoted
       const relaxedJson = clean
         .replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":')
         .replace(/'/g, '"');
@@ -70,6 +69,7 @@ export const FirebaseModal: React.FC<FirebaseModalProps> = ({
       if (parsed.storageBucket) setStorageBucket(parsed.storageBucket);
       if (parsed.messagingSenderId) setMessagingSenderId(parsed.messagingSenderId);
       if (parsed.appId) setAppId(parsed.appId);
+      if (parsed.firestoreDatabaseId) setFirestoreDatabaseId(parsed.firestoreDatabaseId);
 
       setStatusMessage({ text: '¡Configuración detectada y cargada en los campos!', isError: false });
       setUseRawJson(false);
@@ -83,27 +83,26 @@ export const FirebaseModal: React.FC<FirebaseModalProps> = ({
 
     if (!apiKey.trim() || (!databaseURL.trim() && !projectId.trim())) {
       setStatusMessage({
-        text: 'Por favor ingresa al menos la API Key y la URL de Realtime Database (o Project ID).',
+        text: 'Por favor ingresa al menos la API Key y el Project ID (o URL de Realtime Database).',
         isError: true
       });
       return;
     }
 
-    const calculatedDbUrl = databaseURL.trim() || `https://${projectId.trim()}-default-rtdb.firebaseio.com`;
-
     const config: FirebaseConfig = {
       apiKey: apiKey.trim(),
-      authDomain: authDomain.trim(),
-      databaseURL: calculatedDbUrl,
+      authDomain: authDomain.trim() || `${projectId.trim()}.firebaseapp.com`,
+      databaseURL: databaseURL.trim() || undefined,
       projectId: projectId.trim(),
       storageBucket: storageBucket.trim(),
       messagingSenderId: messagingSenderId.trim(),
-      appId: appId.trim()
+      appId: appId.trim(),
+      firestoreDatabaseId: firestoreDatabaseId.trim() || undefined
     };
 
     const success = firebaseService.saveConfig(config);
     if (success) {
-      setStatusMessage({ text: '¡Firebase Realtime Database conectado y guardado con éxito!', isError: false });
+      setStatusMessage({ text: '¡Firebase Firestore & Database conectado y guardado con éxito!', isError: false });
       onConfigSaved();
       setTimeout(() => {
         onClose();
@@ -122,6 +121,7 @@ export const FirebaseModal: React.FC<FirebaseModalProps> = ({
     setStorageBucket('');
     setMessagingSenderId('');
     setAppId('');
+    setFirestoreDatabaseId('');
     setRawJsonInput('');
     setStatusMessage({ text: 'Configuración de Firebase eliminada. Se usará el modo local seguro sincronizado.', isError: false });
     onConfigSaved();
@@ -146,10 +146,10 @@ export const FirebaseModal: React.FC<FirebaseModalProps> = ({
             </div>
             <div>
               <h3 className="font-bold text-base text-white">
-                Configuración de Firebase Realtime Database
+                Configuración de Firebase (Firestore & Realtime Database)
               </h3>
               <p className="text-xs text-slate-400">
-                Conecta tu proyecto gratuito de Firebase para sincronizar alumnos y alertas en tiempo real
+                Sincronización remota y persistente para exámenes, sala de espera Kahoot y supervisión proctoring
               </p>
             </div>
           </div>
@@ -320,16 +320,29 @@ export const FirebaseModal: React.FC<FirebaseModalProps> = ({
                 </div>
                 <div>
                   <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
-                    Messaging Sender ID
+                    Firestore Database ID
                   </label>
                   <input
                     type="text"
-                    value={messagingSenderId}
-                    onChange={(e) => setMessagingSenderId(e.target.value)}
-                    placeholder="123456789"
+                    value={firestoreDatabaseId}
+                    onChange={(e) => setFirestoreDatabaseId(e.target.value)}
+                    placeholder="(default) o ID provisionado"
                     className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 uppercase mb-1">
+                  Messaging Sender ID
+                </label>
+                <input
+                  type="text"
+                  value={messagingSenderId}
+                  onChange={(e) => setMessagingSenderId(e.target.value)}
+                  placeholder="123456789"
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
               </div>
 
               <div className="flex items-center justify-between pt-4 border-t border-slate-800">

@@ -1,7 +1,64 @@
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
-import { getDatabase, ref, set, onValue, remove, Database, Unsubscribe } from 'firebase/database';
+import { getDatabase, ref, set, onValue, remove, Database } from 'firebase/database';
+import { 
+  getFirestore, 
+  initializeFirestore,
+  Firestore, 
+  doc, 
+  setDoc, 
+  onSnapshot, 
+  deleteDoc, 
+  collection, 
+  getDocFromServer,
+  Unsubscribe as FirestoreUnsubscribe 
+} from 'firebase/firestore';
 import { StudentExamState, FirebaseConfig, Question, GlobalSessionState } from '../types';
 import { CHEMISTRY_QUESTIONS } from '../data/questions';
+import defaultAppletConfig from '../../firebase-applet-config.json';
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: null,
+      email: null,
+      emailVerified: null,
+      isAnonymous: null,
+      tenantId: null,
+      providerInfo: []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  return errInfo;
+}
 
 const STORAGE_KEY_FIREBASE_CONFIG = 'quimica_firebase_config_v1';
 const STORAGE_KEY_STUDENTS_LOCAL = 'quimica_students_local_db';
@@ -9,7 +66,7 @@ const STORAGE_KEY_EXAM_DATA = 'quimica_exam_data_v1';
 const STORAGE_KEY_SESSION_DATA = 'quimica_global_session_v1';
 const CHANNEL_NAME = 'quimica_live_proctor_channel';
 
-// Paths in Firebase Realtime Database
+// Paths in Firebase
 const DB_BASE_PATH = 'exams/quimica_general_2026/students';
 const DB_EXAM_PATH = 'exams/quimica_general_2026/exam_data';
 const DB_SESSION_PATH = 'exams/quimica_general_2026/global_session';
@@ -20,9 +77,10 @@ export interface ExamDataPayload {
   updatedAt: number;
 }
 
-class FirebaseRealtimeService {
+class FirebaseDualService {
   private app: FirebaseApp | null = null;
   private db: Database | null = null;
+  private firestore: Firestore | null = null;
   private config: FirebaseConfig | null = null;
   private broadcastChannel: BroadcastChannel | null = null;
   private localStudentsCache: Record<string, StudentExamState> = {};
@@ -44,15 +102,20 @@ class FirebaseRealtimeService {
   private examListeners: Set<(data: ExamDataPayload) => void> = new Set();
   private sessionListeners: Set<(session: GlobalSessionState) => void> = new Set();
 
-  private firebaseUnsub: Unsubscribe | null = null;
-  private firebaseExamUnsub: Unsubscribe | null = null;
-  private firebaseSessionUnsub: Unsubscribe | null = null;
+  private rtdbStudentsUnsub: (() => void) | null = null;
+  private rtdbExamUnsub: (() => void) | null = null;
+  private rtdbSessionUnsub: (() => void) | null = null;
+
+  private firestoreStudentsUnsub: FirestoreUnsubscribe | null = null;
+  private firestoreExamUnsub: FirestoreUnsubscribe | null = null;
+  private firestoreSessionUnsub: FirestoreUnsubscribe | null = null;
 
   constructor() {
     this.initBroadcastChannel();
-    this.loadConfigFromStorage();
     this.loadExamFromStorage();
     this.loadSessionFromStorage();
+    this.loadLocalCache();
+    this.initDefaultConfig();
   }
 
   private initBroadcastChannel() {
@@ -81,9 +144,8 @@ class FirebaseRealtimeService {
     }
   }
 
-  private loadConfigFromStorage() {
+  private loadLocalCache() {
     if (typeof window === 'undefined') return;
-
     try {
       const savedStudents = localStorage.getItem(STORAGE_KEY_STUDENTS_LOCAL);
       if (savedStudents) {
@@ -92,18 +154,37 @@ class FirebaseRealtimeService {
     } catch {
       // Ignore
     }
+  }
 
+  private initDefaultConfig() {
+    if (typeof window === 'undefined') return;
+
+    // Check localStorage first
     try {
       const saved = localStorage.getItem(STORAGE_KEY_FIREBASE_CONFIG);
       if (saved) {
         const parsed = JSON.parse(saved) as FirebaseConfig;
-        if (parsed.apiKey && (parsed.databaseURL || parsed.projectId)) {
-          this.config = parsed;
+        if (parsed.apiKey && (parsed.projectId || parsed.databaseURL)) {
           this.initFirebase(parsed);
+          return;
         }
       }
     } catch {
       // Ignore
+    }
+
+    // Auto-connect with provisioned firebase-applet-config.json
+    if (defaultAppletConfig && defaultAppletConfig.apiKey && defaultAppletConfig.projectId) {
+      const autoConfig: FirebaseConfig = {
+        apiKey: defaultAppletConfig.apiKey,
+        authDomain: defaultAppletConfig.authDomain || `${defaultAppletConfig.projectId}.firebaseapp.com`,
+        projectId: defaultAppletConfig.projectId,
+        storageBucket: defaultAppletConfig.storageBucket,
+        messagingSenderId: defaultAppletConfig.messagingSenderId,
+        appId: defaultAppletConfig.appId,
+        firestoreDatabaseId: defaultAppletConfig.firestoreDatabaseId
+      };
+      this.initFirebase(autoConfig);
     }
   }
 
@@ -147,16 +228,64 @@ class FirebaseRealtimeService {
         this.app = initializeApp(config);
       }
 
-      this.db = getDatabase(this.app, config.databaseURL);
-      localStorage.setItem(STORAGE_KEY_FIREBASE_CONFIG, JSON.stringify(config));
+      // Initialize Firestore if available
+      try {
+        if (config.firestoreDatabaseId) {
+          try {
+            this.firestore = initializeFirestore(this.app, {
+              experimentalAutoDetectLongPolling: true
+            }, config.firestoreDatabaseId);
+          } catch {
+            this.firestore = getFirestore(this.app, config.firestoreDatabaseId);
+          }
+        } else {
+          try {
+            this.firestore = initializeFirestore(this.app, {
+              experimentalAutoDetectLongPolling: true
+            });
+          } catch {
+            this.firestore = getFirestore(this.app);
+          }
+        }
+        this.testFirestoreConnection();
+        this.setupFirestoreListeners();
+      } catch (fErr) {
+        console.warn('Firestore initialization note:', fErr);
+      }
 
-      this.setupFirebaseListener();
-      this.setupFirebaseExamListener();
-      this.setupFirebaseSessionListener();
+      // Initialize Realtime Database if databaseURL is provided
+      if (config.databaseURL) {
+        try {
+          this.db = getDatabase(this.app, config.databaseURL);
+          this.setupRTDBListeners();
+        } catch (rErr) {
+          console.warn('RTDB initialization note:', rErr);
+        }
+      }
+
+      localStorage.setItem(STORAGE_KEY_FIREBASE_CONFIG, JSON.stringify(config));
       return true;
     } catch (err) {
-      console.error('Error al inicializar Firebase Realtime Database:', err);
+      console.error('Error al inicializar Firebase:', err);
       return false;
+    }
+  }
+
+  private async testFirestoreConnection() {
+    if (!this.firestore) return;
+    try {
+      await getDocFromServer(doc(this.firestore, 'test', 'connection'));
+    } catch (error) {
+      if (error instanceof Error) {
+        const msg = error.message.toLowerCase();
+        if (msg.includes('offline') || msg.includes('unavailable') || (error as { code?: string }).code === 'unavailable') {
+          console.warn('Firestore: funcionando en modo offline / caché local mientras se estabiliza la conexión.');
+        } else if ((error as { code?: string }).code === 'permission-denied') {
+          handleFirestoreError(error, OperationType.GET, 'test/connection');
+        } else {
+          console.warn('Firestore aviso de conexión:', error.message);
+        }
+      }
     }
   }
 
@@ -169,16 +298,27 @@ class FirebaseRealtimeService {
   }
 
   public isConfigured(): boolean {
-    return !!(this.config && this.config.apiKey && (this.config.databaseURL || this.config.projectId));
+    return !!(this.config && this.config.apiKey && (this.config.projectId || this.config.databaseURL));
+  }
+
+  public isFirestoreActive(): boolean {
+    return !!this.firestore;
   }
 
   public clearConfig() {
     this.config = null;
     this.db = null;
+    this.firestore = null;
     this.app = null;
-    if (this.firebaseUnsub) this.firebaseUnsub();
-    if (this.firebaseExamUnsub) this.firebaseExamUnsub();
-    if (this.firebaseSessionUnsub) this.firebaseSessionUnsub();
+
+    if (this.rtdbStudentsUnsub) this.rtdbStudentsUnsub();
+    if (this.rtdbExamUnsub) this.rtdbExamUnsub();
+    if (this.rtdbSessionUnsub) this.rtdbSessionUnsub();
+
+    if (this.firestoreStudentsUnsub) this.firestoreStudentsUnsub();
+    if (this.firestoreExamUnsub) this.firestoreExamUnsub();
+    if (this.firestoreSessionUnsub) this.firestoreSessionUnsub();
+
     localStorage.removeItem(STORAGE_KEY_FIREBASE_CONFIG);
     this.notifyListeners();
   }
@@ -209,12 +349,27 @@ class FirebaseRealtimeService {
     }
     this.notifySessionListeners();
 
+    // Sync to Firestore
+    if (this.firestore) {
+      try {
+        const sessionDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'session', 'current');
+        await setDoc(sessionDocRef, session, { merge: true });
+      } catch (err) {
+        if ((err as { code?: string })?.code === 'permission-denied') {
+          handleFirestoreError(err, OperationType.WRITE, 'exams/quimica_general_2026/session/current');
+        } else {
+          console.warn('Error guardando sesión en Firestore:', err);
+        }
+      }
+    }
+
+    // Sync to RTDB fallback
     if (this.db) {
       try {
         const sessionRef = ref(this.db, DB_SESSION_PATH);
         await set(sessionRef, session);
       } catch (err) {
-        console.error('Error guardando sesión en Firebase:', err);
+        console.error('Error guardando sesión en RTDB:', err);
       }
     }
   }
@@ -260,36 +415,9 @@ class FirebaseRealtimeService {
     this.sessionListeners.add(callback);
     callback(this.globalSession);
 
-    if (this.db && !this.firebaseSessionUnsub) {
-      this.setupFirebaseSessionListener();
-    }
-
     return () => {
       this.sessionListeners.delete(callback);
     };
-  }
-
-  private setupFirebaseSessionListener() {
-    if (!this.db) return;
-    if (this.firebaseSessionUnsub) this.firebaseSessionUnsub();
-
-    try {
-      const sessionRef = ref(this.db, DB_SESSION_PATH);
-      this.firebaseSessionUnsub = onValue(sessionRef, (snapshot) => {
-        const val = snapshot.val() as GlobalSessionState;
-        if (val && val.status) {
-          this.globalSession = val;
-          try {
-            localStorage.setItem(STORAGE_KEY_SESSION_DATA, JSON.stringify(val));
-          } catch {
-            // Ignore
-          }
-          this.notifySessionListeners();
-        }
-      });
-    } catch (err) {
-      console.error('Error setupFirebaseSessionListener:', err);
-    }
   }
 
   private notifySessionListeners() {
@@ -336,12 +464,27 @@ class FirebaseRealtimeService {
 
     this.notifyExamListeners();
 
+    // Save to Firestore
+    if (this.firestore) {
+      try {
+        const examDocRef = doc(this.firestore, 'exams', 'quimica_general_2026');
+        await setDoc(examDocRef, payload, { merge: true });
+      } catch (err) {
+        if ((err as { code?: string })?.code === 'permission-denied') {
+          handleFirestoreError(err, OperationType.WRITE, 'exams/quimica_general_2026');
+        } else {
+          console.warn('Error guardando examen en Firestore:', err);
+        }
+      }
+    }
+
+    // Save to RTDB
     if (this.db) {
       try {
         const examRef = ref(this.db, DB_EXAM_PATH);
         await set(examRef, payload);
       } catch (err) {
-        console.error('Error guardando examen en Firebase:', err);
+        console.error('Error guardando examen en RTDB:', err);
       }
     }
   }
@@ -350,36 +493,9 @@ class FirebaseRealtimeService {
     this.examListeners.add(callback);
     callback(this.activeExamData);
 
-    if (this.db && !this.firebaseExamUnsub) {
-      this.setupFirebaseExamListener();
-    }
-
     return () => {
       this.examListeners.delete(callback);
     };
-  }
-
-  private setupFirebaseExamListener() {
-    if (!this.db) return;
-    if (this.firebaseExamUnsub) this.firebaseExamUnsub();
-
-    try {
-      const examRef = ref(this.db, DB_EXAM_PATH);
-      this.firebaseExamUnsub = onValue(examRef, (snapshot) => {
-        const val = snapshot.val() as ExamDataPayload;
-        if (val && Array.isArray(val.questions) && val.questions.length > 0) {
-          this.activeExamData = val;
-          try {
-            localStorage.setItem(STORAGE_KEY_EXAM_DATA, JSON.stringify(val));
-          } catch {
-            // Ignore
-          }
-          this.notifyExamListeners();
-        }
-      });
-    } catch (err) {
-      console.error('Error setupFirebaseExamListener:', err);
-    }
   }
 
   private notifyExamListeners() {
@@ -412,12 +528,27 @@ class FirebaseRealtimeService {
 
     this.notifyListeners();
 
+    // Sync to Firestore
+    if (this.firestore) {
+      try {
+        const studentDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'students', student.id);
+        await setDoc(studentDocRef, student, { merge: true });
+      } catch (err) {
+        if ((err as { code?: string })?.code === 'permission-denied') {
+          handleFirestoreError(err, OperationType.WRITE, `exams/quimica_general_2026/students/${student.id}`);
+        } else {
+          console.warn('Error guardando estudiante en Firestore:', err);
+        }
+      }
+    }
+
+    // Sync to RTDB
     if (this.db) {
       try {
         const studentRef = ref(this.db, `${DB_BASE_PATH}/${student.id}`);
         await set(studentRef, student);
       } catch (err) {
-        console.error('Error escribiendo en Firebase Realtime Database:', err);
+        console.error('Error escribiendo en Firebase RTDB:', err);
       }
     }
   }
@@ -438,12 +569,27 @@ class FirebaseRealtimeService {
     }
     this.notifyListeners();
 
+    // Delete from Firestore
+    if (this.firestore) {
+      try {
+        const studentDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'students', studentId);
+        await deleteDoc(studentDocRef);
+      } catch (err) {
+        if ((err as { code?: string })?.code === 'permission-denied') {
+          handleFirestoreError(err, OperationType.DELETE, `exams/quimica_general_2026/students/${studentId}`);
+        } else {
+          console.warn('Error eliminando de Firestore:', err);
+        }
+      }
+    }
+
+    // Delete from RTDB
     if (this.db) {
       try {
         const studentRef = ref(this.db, `${DB_BASE_PATH}/${studentId}`);
         await remove(studentRef);
       } catch (err) {
-        console.error('Error eliminando de Firebase:', err);
+        console.error('Error eliminando de RTDB:', err);
       }
     }
   }
@@ -456,31 +602,99 @@ class FirebaseRealtimeService {
     this.activeListeners.add(callback);
     callback({ ...this.localStudentsCache });
 
-    if (this.db && !this.firebaseUnsub) {
-      this.setupFirebaseListener();
-    }
-
     return () => {
       this.activeListeners.delete(callback);
     };
   }
 
-  private setupFirebaseListener() {
+  // --- FIRESTORE REAL-TIME SNAPSHOT LISTENERS ---
+
+  private setupFirestoreListeners() {
+    if (!this.firestore) return;
+
+    if (this.firestoreStudentsUnsub) this.firestoreStudentsUnsub();
+    if (this.firestoreExamUnsub) this.firestoreExamUnsub();
+    if (this.firestoreSessionUnsub) this.firestoreSessionUnsub();
+
+    try {
+      // 1. Students collection listener
+      const studentsColRef = collection(this.firestore, 'exams', 'quimica_general_2026', 'students');
+      this.firestoreStudentsUnsub = onSnapshot(studentsColRef, (snapshot) => {
+        const updated: Record<string, StudentExamState> = {};
+        snapshot.forEach((docSnap) => {
+          updated[docSnap.id] = docSnap.data() as StudentExamState;
+        });
+        if (Object.keys(updated).length > 0 || snapshot.metadata.fromCache === false) {
+          this.localStudentsCache = updated;
+          this.saveLocalCache();
+          this.notifyListeners();
+        }
+      }, (error) => {
+        if (error.code === 'permission-denied') {
+          handleFirestoreError(error, OperationType.LIST, 'exams/quimica_general_2026/students');
+        } else {
+          console.warn('Firestore students listener warning:', error);
+        }
+      });
+
+      // 2. Exam document listener
+      const examDocRef = doc(this.firestore, 'exams', 'quimica_general_2026');
+      this.firestoreExamUnsub = onSnapshot(examDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+          const val = docSnap.data() as ExamDataPayload;
+          if (val && Array.isArray(val.questions) && val.questions.length > 0) {
+            this.activeExamData = val;
+            this.notifyExamListeners();
+          }
+        }
+      }, (error) => {
+        if (error.code === 'permission-denied') {
+          handleFirestoreError(error, OperationType.GET, 'exams/quimica_general_2026');
+        } else {
+          console.warn('Firestore exam listener warning:', error);
+        }
+      });
+
+      // 3. Session document listener
+      const sessionDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'session', 'current');
+      this.firestoreSessionUnsub = onSnapshot(sessionDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+          const val = docSnap.data() as GlobalSessionState;
+          if (val && val.status) {
+            this.globalSession = val;
+            this.notifySessionListeners();
+          }
+        }
+      }, (error) => {
+        if (error.code === 'permission-denied') {
+          handleFirestoreError(error, OperationType.GET, 'exams/quimica_general_2026/session/current');
+        } else {
+          console.warn('Firestore session listener warning:', error);
+        }
+      });
+    } catch (err) {
+      console.error('Error configurando listeners de Firestore:', err);
+    }
+  }
+
+  // --- RTDB FALLBACK LISTENERS ---
+
+  private setupRTDBListeners() {
     if (!this.db) return;
-    if (this.firebaseUnsub) this.firebaseUnsub();
+    if (this.rtdbStudentsUnsub) this.rtdbStudentsUnsub();
 
     try {
       const studentsRef = ref(this.db, DB_BASE_PATH);
-      this.firebaseUnsub = onValue(studentsRef, (snapshot) => {
+      this.rtdbStudentsUnsub = onValue(studentsRef, (snapshot) => {
         const val = snapshot.val();
-        this.localStudentsCache = val || {};
-        this.saveLocalCache();
-        this.notifyListeners();
-      }, (error) => {
-        console.error('Firebase Realtime Database listener error:', error);
+        if (val && !this.firestore) {
+          this.localStudentsCache = val || {};
+          this.saveLocalCache();
+          this.notifyListeners();
+        }
       });
     } catch (err) {
-      console.error('Error setting up Firebase Realtime Database listener:', err);
+      console.error('Error configurando listener RTDB:', err);
     }
   }
 
@@ -506,8 +720,10 @@ class FirebaseRealtimeService {
 
   // Clear all students to reuse exam with a fresh group
   public async clearAllStudents(): Promise<void> {
+    const studentIds = Object.keys(this.localStudentsCache);
     this.localStudentsCache = {};
     this.saveLocalCache();
+
     if (this.broadcastChannel) {
       try {
         this.broadcastChannel.postMessage({
@@ -520,14 +736,32 @@ class FirebaseRealtimeService {
     }
     this.notifyListeners();
 
+    // Delete documents in Firestore
+    if (this.firestore) {
+      try {
+        const deletePromises = studentIds.map((id) => 
+          deleteDoc(doc(this.firestore!, 'exams', 'quimica_general_2026', 'students', id))
+        );
+        await Promise.all(deletePromises);
+      } catch (err) {
+        if ((err as { code?: string })?.code === 'permission-denied') {
+          handleFirestoreError(err, OperationType.DELETE, 'exams/quimica_general_2026/students');
+        } else {
+          console.warn('Error limpiando Firestore students:', err);
+        }
+      }
+    }
+
+    // Delete in RTDB
     if (this.db) {
       try {
         const baseRef = ref(this.db, DB_BASE_PATH);
         await remove(baseRef);
       } catch (err) {
-        console.error('Error limpiando base de datos:', err);
+        console.error('Error limpiando RTDB:', err);
       }
     }
+
     await this.resetSessionToWaitingRoom();
   }
 
@@ -602,4 +836,4 @@ class FirebaseRealtimeService {
   }
 }
 
-export const firebaseService = new FirebaseRealtimeService();
+export const firebaseService = new FirebaseDualService();

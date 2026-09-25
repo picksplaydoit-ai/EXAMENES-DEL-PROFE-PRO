@@ -61,9 +61,10 @@ export interface GlobalSessionState {
 export interface FirebaseConfig {
   apiKey: string;
   authDomain: string;
-  databaseURL: string;
+  databaseURL?: string;
   projectId: string;
-  storageBucket: string;
-  messagingSenderId: string;
-  appId: string;
+  storageBucket?: string;
+  messagingSenderId?: string;
+  appId?: string;
+  firestoreDatabaseId?: string;
 }
