@@ -10,6 +10,8 @@ export const STANDALONE_HTML_CODE = `<!DOCTYPE html>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
   <!-- Canvas Confetti CDN -->
   <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
+  <!-- SheetJS (xlsx) CDN for Excel Export -->
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -28,7 +30,7 @@ export const STANDALONE_HTML_CODE = `<!DOCTYPE html>
   <!-- ==========================================
        HEADER & ROL SWITCHER
        ========================================== -->
-  <header class="border-b border-slate-800 bg-slate-950/80 backdrop-blur-md sticky top-0 z-40">
+  <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur-md sticky top-0 z-40">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between">
       <div class="flex items-center space-x-3">
         <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/30">
@@ -44,13 +46,17 @@ export const STANDALONE_HTML_CODE = `<!DOCTYPE html>
       </div>
 
       <!-- Role selector buttons -->
-      <div class="flex items-center space-x-2 bg-slate-900 p-1 rounded-2xl border border-slate-800">
+      <div id="roleNavContainer" class="flex items-center space-x-2 bg-slate-900 p-1 rounded-2xl border border-slate-800">
         <button id="btnRoleStudent" onclick="setRole('student')" class="px-4 py-2 rounded-xl text-xs font-black transition-all bg-indigo-600 text-white shadow-md shadow-indigo-600/30">
           🎓 Alumno
         </button>
         <button id="btnRoleTeacher" onclick="setRole('teacher')" class="px-4 py-2 rounded-xl text-xs font-black transition-all text-slate-400 hover:text-white">
           👨‍🏫 Profesor (Panel Vivo)
         </button>
+      </div>
+
+      <div id="studentOnlyBadge" class="hidden px-3.5 py-1.5 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-xs font-bold shadow-sm">
+        🎓 Portal Alumno (Examen Oficial)
       </div>
     </div>
   </header>
@@ -344,9 +350,14 @@ export const STANDALONE_HTML_CODE = `<!DOCTYPE html>
           <span>Limpiar / Nuevo Grupo</span>
         </button>
 
-        <button type="button" onclick="exportToCSV()" class="px-3.5 py-2.5 rounded-xl font-bold text-xs text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 flex items-center space-x-1.5">
-          <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-          <span>Exportar CSV</span>
+        <button type="button" onclick="exportToExcel()" class="px-3.5 py-2.5 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-md border border-emerald-500/40 flex items-center space-x-1.5">
+          <svg class="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+          <span>Descargar Excel (.xlsx)</span>
+        </button>
+
+        <button type="button" onclick="exportToCSV()" class="px-3.5 py-2.5 rounded-xl font-bold text-xs text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 flex items-center space-x-1.5">
+          <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+          <span>CSV</span>
         </button>
       </div>
     </div>
@@ -1341,9 +1352,9 @@ RETROALIMENTACION: La masa se conserva en cualquier reacción ordinaria.\`;
       alert(\`¡Examen actualizado con éxito! (\${parsed.length} preguntas sincronizadas).\`);
     };
 
-    // QR Modal
+    // QR Modal con enlace protegido para alumnos (sin acceso al panel de profesor)
     window.showQRCodeModal = function() {
-      const studentUrl = window.location.origin + window.location.pathname;
+      const studentUrl = window.location.origin + window.location.pathname + '?role=student&mode=student_only';
       document.getElementById('qrUrlText').innerText = studentUrl;
       const qrCanvas = document.getElementById('qrCanvas');
       if (window.QRious) {
@@ -1363,8 +1374,9 @@ RETROALIMENTACION: La masa se conserva en cualquier reacción ordinaria.\`;
     };
 
     window.copyStudentUrl = function() {
-      navigator.clipboard.writeText(window.location.origin + window.location.pathname);
-      alert("Enlace copiado al portapapeles.");
+      const studentUrl = window.location.origin + window.location.pathname + '?role=student&mode=student_only';
+      navigator.clipboard.writeText(studentUrl);
+      alert("Enlace protegido para alumnos copiado al portapapeles.");
     };
 
     // Confirm Clear Database
@@ -1380,6 +1392,38 @@ RETROALIMENTACION: La masa se conserva en cualquier reacción ordinaria.\`;
       }
     };
 
+    // Export to Excel (.xlsx) using SheetJS
+    window.exportToExcel = function() {
+      const list = Object.values(studentsDB);
+      if (list.length === 0) return alert("No hay alumnos registrados para exportar.");
+
+      if (!window.XLSX) {
+        return exportToCSV();
+      }
+
+      // 1. Resumen de calificaciones
+      const summaryData = list.map((s, idx) => ({
+        '#': idx + 1,
+        'Matrícula': s.matricula,
+        'Nombre Completo': s.fullName,
+        'Estado': s.status === 'forced_submission_cheat' ? 'Expulsado por Faltas' : s.status === 'submitted' ? 'Completado' : s.status === 'waiting' ? 'En Sala' : 'En Curso',
+        'Calificación': s.score || 0,
+        'Puntaje Máximo': totalPoints,
+        'Porcentaje': \`\${s.percentage || 0}%\`,
+        'Resultado': (s.percentage || 0) >= 60 ? 'APROBADO' : 'REPROBADO',
+        'Faltas Anti-Trampas': s.warnings || 0
+      }));
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(summaryData);
+      ws['!cols'] = [{ wch: 5 }, { wch: 18 }, { wch: 30 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 20 }];
+      XLSX.utils.book_append_sheet(wb, ws, 'Calificaciones');
+
+      const cleanTitle = examTitle.replace(/[\\\\/*?[\\]:]/g, '_').replace(/\\s+/g, '_');
+      const fileName = \`Reporte_\${cleanTitle}_\${new Date().toISOString().slice(0, 10)}.xlsx\`;
+      XLSX.writeFile(wb, fileName);
+    };
+
     // Export CSV
     window.exportToCSV = function() {
       const list = Object.values(studentsDB);
@@ -1393,9 +1437,16 @@ RETROALIMENTACION: La masa se conserva en cualquier reacción ordinaria.\`;
       a.click();
     };
 
-    // URL Param ?role=teacher detection
+    // URL Parameters Detection: Modo Alumno Seguro
     const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('role') === 'teacher') {
+    const isStudentOnly = urlParams.get('mode') === 'student_only' || urlParams.get('role') === 'student';
+    if (isStudentOnly) {
+      setRole('student');
+      const nav = document.getElementById('roleNavContainer');
+      if (nav) nav.style.display = 'none';
+      const badge = document.getElementById('studentOnlyBadge');
+      if (badge) badge.classList.remove('hidden');
+    } else if (urlParams.get('role') === 'teacher') {
       setRole('teacher');
     }
   </script>

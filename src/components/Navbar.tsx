@@ -7,6 +7,7 @@ interface NavbarProps {
   onOpenFirebaseConfig: () => void;
   onOpenDeployModal: () => void;
   isFirebaseConnected: boolean;
+  isStudentOnly?: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -14,7 +15,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onRoleChange,
   onOpenFirebaseConfig,
   onOpenDeployModal,
-  isFirebaseConnected
+  isFirebaseConnected,
+  isStudentOnly = false
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800">
@@ -43,70 +45,80 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Navigation Controls */}
           <div className="flex items-center space-x-2 sm:space-x-3">
-            {/* Role Switcher Pill */}
-            <div className="bg-slate-800/90 p-1 rounded-xl border border-slate-700/60 flex items-center">
-              <button
-                type="button"
-                onClick={() => onRoleChange('student')}
-                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  currentRole === 'student'
-                    ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-600/30'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <GraduationCap className="w-3.5 h-3.5" />
-                <span>Vista Alumno</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => onRoleChange('teacher')}
-                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  currentRole === 'teacher'
-                    ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-600/30'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Monitor className="w-3.5 h-3.5" />
-                <span>Panel Profesor</span>
-              </button>
-            </div>
+            {isStudentOnly ? (
+              /* When in student mode (e.g. from QR code), no teacher switcher or admin controls are visible */
+              <div className="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-xs font-bold shadow-sm">
+                <GraduationCap className="w-4 h-4 text-indigo-400" />
+                <span>Portal Alumno (Examen Oficial)</span>
+              </div>
+            ) : (
+              <>
+                {/* Role Switcher Pill */}
+                <div className="bg-slate-800/90 p-1 rounded-xl border border-slate-700/60 flex items-center">
+                  <button
+                    type="button"
+                    onClick={() => onRoleChange('student')}
+                    className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      currentRole === 'student'
+                        ? 'bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-600/30'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <GraduationCap className="w-3.5 h-3.5" />
+                    <span>Vista Alumno</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onRoleChange('teacher')}
+                    className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      currentRole === 'teacher'
+                        ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-600/30'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Monitor className="w-3.5 h-3.5" />
+                    <span>Panel Profesor</span>
+                  </button>
+                </div>
 
-            {/* Firebase Connection Status Pill */}
-            <button
-              type="button"
-              onClick={onOpenFirebaseConfig}
-              title="Configuración de Firebase Realtime Database"
-              className={`hidden md:flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                isFirebaseConnected
-                  ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/20'
-                  : 'bg-amber-500/10 text-amber-300 border-amber-500/30 hover:bg-amber-500/20'
-              }`}
-            >
-              {isFirebaseConnected ? (
-                <>
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  <Database className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Firebase RTDB</span>
-                </>
-              ) : (
-                <>
-                  <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Modo Local / Configurar</span>
-                </>
-              )}
-            </button>
+                {/* Firebase Connection Status Pill */}
+                <button
+                  type="button"
+                  onClick={onOpenFirebaseConfig}
+                  title="Configuración de Firebase Realtime Database"
+                  className={`hidden md:flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                    isFirebaseConnected
+                      ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/20'
+                      : 'bg-amber-500/10 text-amber-300 border-amber-500/30 hover:bg-amber-500/20'
+                  }`}
+                >
+                  {isFirebaseConnected ? (
+                    <>
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <Database className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Firebase RTDB</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Modo Local / Configurar</span>
+                    </>
+                  )}
+                </button>
 
-            {/* Deploy & Export Button */}
-            <button
-              type="button"
-              onClick={onOpenDeployModal}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600 transition-all shadow-sm"
-              title="Desplegar en Vercel y descargar código"
-            >
-              <UploadCloud className="w-3.5 h-3.5 text-indigo-400" />
-              <span className="hidden sm:inline">Desplegar en Vercel</span>
-              <span className="sm:hidden">Vercel</span>
-            </button>
+                {/* Deploy & Export Button */}
+                <button
+                  type="button"
+                  onClick={onOpenDeployModal}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-slate-600 transition-all shadow-sm"
+                  title="Desplegar en Vercel y descargar código"
+                >
+                  <UploadCloud className="w-3.5 h-3.5 text-indigo-400" />
+                  <span className="hidden sm:inline">Desplegar en Vercel</span>
+                  <span className="sm:hidden">Vercel</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>

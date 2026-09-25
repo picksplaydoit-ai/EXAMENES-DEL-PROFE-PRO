@@ -29,9 +29,13 @@ import { QuestionCard } from './QuestionCard';
 
 interface StudentViewProps {
   onSwitchToTeacher?: () => void;
+  isStudentOnly?: boolean;
 }
 
-export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) => {
+export const StudentView: React.FC<StudentViewProps> = ({ 
+  onSwitchToTeacher,
+  isStudentOnly = false
+}) => {
   // Global Session & Exam Data
   const [examData, setExamData] = useState<ExamDataPayload>(firebaseService.getActiveExam());
   const [globalSession, setGlobalSession] = useState<GlobalSessionState>(firebaseService.getGlobalSession());
@@ -999,7 +1003,7 @@ export const StudentView: React.FC<StudentViewProps> = ({ onSwitchToTeacher }) =
               <span>Realizar nuevo intento (Reiniciar)</span>
             </button>
 
-            {onSwitchToTeacher && (
+            {onSwitchToTeacher && !isStudentOnly && (
               <button
                 type="button"
                 onClick={onSwitchToTeacher}

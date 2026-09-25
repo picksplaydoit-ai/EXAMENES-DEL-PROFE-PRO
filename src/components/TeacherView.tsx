@@ -29,8 +29,11 @@ import {
   Hourglass,
   ArrowRightLeft,
   AlignLeft,
-  Check
+  Check,
+  StopCircle,
+  Award
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { StudentExamState, Question, GlobalSessionState } from '../types';
 import { firebaseService, ExamDataPayload } from '../services/firebaseService';
 import { ExamLoaderModal } from './ExamLoaderModal';
@@ -173,7 +176,157 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   // Reset Session To Waiting Room
   const handleResetSessionToWaitingRoom = async () => {
     await firebaseService.resetSessionToWaitingRoom();
-    showNotification('⏸️ Examen pausado. La sala ha vuelto al modo Espera.');
+    showNotification('⏸️ Sala de Espera reactivada.');
+  };
+
+  // Export to Excel (.xlsx) con 3 hojas: Calificaciones, Detalle de Respuestas y Auditoría Anti-Trampas
+  const handleExportExcel = () => {
+    if (studentList.length === 0) {
+      showNotification('No hay alumnos registrados para exportar.');
+      return;
+    }
+
+    // 1. Hoja Resumen de Calificaciones
+    const summaryData = studentList.map((st, index) => {
+      const isApproved = (st.percentage || 0) >= 60;
+      const durationMin = st.startedAt && st.submittedAt
+        ? Math.max(1, Math.round((st.submittedAt - st.startedAt) / 60000))
+        : '-';
+
+      return {
+        '#': index + 1,
+        'Matrícula / Código': st.matricula,
+        'Nombre Completo': st.fullName,
+        'Estado': st.status === 'forced_submission_cheat'
+          ? 'Expulsado por Faltas'
+          : st.status === 'submitted'
+          ? 'Completado'
+          : st.status === 'waiting'
+          ? 'En Sala de Espera'
+          : 'En Curso',
+        'Puntaje Obtenido': st.score,
+        'Puntaje Máximo': st.maxScore || totalExamPoints,
+        'Porcentaje': `${st.percentage}%`,
+        'Dictamen': isApproved ? 'APROBADO' : 'REPROBADO',
+        'Faltas Anti-Trampas': st.cheatWarningsCount || 0,
+        'Hora Inicio': st.startedAt ? new Date(st.startedAt).toLocaleTimeString() : '-',
+        'Hora Envío': st.submittedAt ? new Date(st.submittedAt).toLocaleTimeString() : '-',
+        'Tiempo Empleado (min)': durationMin
+      };
+    });
+
+    // 2. Hoja Detalle de Respuestas por Pregunta
+    const detailData = studentList.map((st) => {
+      const row: Record<string, any> = {
+        'Matrícula': st.matricula,
+        'Alumno': st.fullName,
+        'Calificación Final': `${st.score}/${st.maxScore || totalExamPoints} (${st.percentage}%)`
+      };
+
+      activeQuestions.forEach((q, idx) => {
+        const ans = st.answers ? st.answers[q.id] : undefined;
+        let displayAns = 'Sin responder';
+        if (q.type === 'opcion_multiple') {
+          if (typeof ans === 'number' && q.options && q.options[ans] !== undefined) {
+            const isCorrect = ans === q.correctAnswer;
+            displayAns = `${String.fromCharCode(65 + ans)}) ${q.options[ans]} [${isCorrect ? 'CORRECTO' : 'INCORRECTO'}]`;
+          }
+        } else if (q.type === 'relacionar') {
+          if (ans && typeof ans === 'object') {
+            displayAns = Object.entries(ans).map(([left, right]) => `${left} ➔ ${right}`).join('; ');
+          }
+        } else if (q.type === 'abierta') {
+          displayAns = typeof ans === 'string' ? ans : 'Sin respuesta';
+        }
+        row[`Reactivo ${idx + 1} (${q.points} pts)`] = displayAns;
+      });
+
+      return row;
+    });
+
+    // 3. Hoja Bitácora Anti-Trampas
+    const cheatData: any[] = [];
+    studentList.forEach((st) => {
+      if (st.cheatLogs && st.cheatLogs.length > 0) {
+        st.cheatLogs.forEach((log) => {
+          cheatData.push({
+            'Matrícula': st.matricula,
+            'Alumno': st.fullName,
+            'Infracción #': log.warningNumber,
+            'Motivo de Falta': log.reason,
+            'Hora Registrada': new Date(log.timestamp).toLocaleTimeString()
+          });
+        });
+      }
+    });
+
+    // Crear Workbook
+    const wb = XLSX.utils.book_new();
+
+    const wsSummary = XLSX.utils.json_to_sheet(summaryData);
+    wsSummary['!cols'] = [
+      { wch: 5 },
+      { wch: 18 },
+      { wch: 32 },
+      { wch: 22 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 20 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 22 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumen Calificaciones');
+
+    if (detailData.length > 0) {
+      const wsDetail = XLSX.utils.json_to_sheet(detailData);
+      XLSX.utils.book_append_sheet(wb, wsDetail, 'Detalle de Respuestas');
+    }
+
+    if (cheatData.length > 0) {
+      const wsCheat = XLSX.utils.json_to_sheet(cheatData);
+      wsCheat['!cols'] = [
+        { wch: 18 },
+        { wch: 30 },
+        { wch: 12 },
+        { wch: 45 },
+        { wch: 18 }
+      ];
+      XLSX.utils.book_append_sheet(wb, wsCheat, 'Auditoría Anti-Trampas');
+    }
+
+    const cleanTitle = examData.title.replace(/[\\/*?[\]:]/g, '_').replace(/\s+/g, '_');
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const fileName = `Reporte_Examen_${cleanTitle}_${dateStr}.xlsx`;
+
+    XLSX.writeFile(wb, fileName);
+    showNotification(`📊 Archivo Excel "${fileName}" descargado con éxito.`);
+  };
+
+  // Finalizar Examen para Todos y abrir descarga de Excel
+  const handleFinishExam = async () => {
+    const now = Date.now();
+    const updatePromises: Promise<void>[] = [];
+    Object.values(students).forEach((st) => {
+      if (st.status === 'in_progress' || st.status === 'waiting') {
+        const updated: StudentExamState = {
+          ...st,
+          status: 'submitted',
+          submittedAt: now
+        };
+        updatePromises.push(firebaseService.syncStudent(updated));
+      }
+    });
+    await Promise.all(updatePromises);
+    await firebaseService.setGlobalSession({
+      ...globalSession,
+      status: 'finished',
+      updatedAt: now
+    });
+    showNotification('🏁 Examen finalizado para todos. Generando Excel...');
+    handleExportExcel();
   };
 
   // Export to CSV
@@ -315,11 +468,23 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               <span className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider flex items-center space-x-1.5 ${
                 globalSession.status === 'active'
                   ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 animate-pulse'
+                  : globalSession.status === 'finished'
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                   : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
               }`}>
-                <span className={`w-2 h-2 rounded-full ${globalSession.status === 'active' ? 'bg-emerald-400 animate-ping' : 'bg-indigo-400'}`} />
+                <span className={`w-2 h-2 rounded-full ${
+                  globalSession.status === 'active' 
+                    ? 'bg-emerald-400 animate-ping' 
+                    : globalSession.status === 'finished'
+                    ? 'bg-amber-400'
+                    : 'bg-indigo-400'
+                }`} />
                 <span>
-                  {globalSession.status === 'active' ? 'Examen en Vivo (Cronómetro Corriendo)' : 'Sala de Espera Kahoot (Abierta)'}
+                  {globalSession.status === 'active' 
+                    ? 'Examen en Vivo (Cronómetro Corriendo)' 
+                    : globalSession.status === 'finished'
+                    ? 'Examen Concluido (Resultados Listos)'
+                    : 'Sala de Espera Kahoot (Abierta)'}
                 </span>
               </span>
               <span className="text-xs text-slate-400 font-mono">
@@ -366,7 +531,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   <span>Comenzar Examen para Todos</span>
                 </button>
               </>
-            ) : (
+            ) : globalSession.status === 'active' ? (
               <div className="flex flex-col sm:flex-row items-center gap-3">
                 {/* Active Global Clock */}
                 <div className="bg-slate-900 border-2 border-indigo-500/50 rounded-2xl px-5 py-2.5 flex items-center space-x-3 text-white shadow-inner">
@@ -385,7 +550,38 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   className="px-4 py-3 rounded-2xl font-bold text-xs text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-all flex items-center space-x-2"
                 >
                   <Pause className="w-4 h-4 text-amber-400" />
-                  <span>Pausar / Volver a Sala</span>
+                  <span>Pausar / Sala</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleFinishExam}
+                  className="px-4 py-3 rounded-2xl font-bold text-xs text-white bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 border border-rose-500/50 shadow-lg shadow-rose-600/30 transition-all flex items-center space-x-2"
+                  title="Finaliza el examen para todos y abre la descarga en Excel"
+                >
+                  <StopCircle className="w-4 h-4 text-white" />
+                  <span>Finalizar Examen</span>
+                </button>
+              </div>
+            ) : (
+              /* Finished State */
+              <div className="flex flex-col sm:flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleExportExcel}
+                  className="px-6 py-3.5 rounded-2xl font-black text-sm text-white bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-400 shadow-xl shadow-emerald-600/35 transition-all flex items-center space-x-2 border border-emerald-400/40"
+                >
+                  <FileSpreadsheet className="w-5 h-5 text-white" />
+                  <span>Descargar Resultados en Excel (.xlsx)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleResetSessionToWaitingRoom}
+                  className="px-4 py-3.5 rounded-2xl font-bold text-xs text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-all flex items-center space-x-2"
+                >
+                  <RotateCcw className="w-4 h-4 text-indigo-400" />
+                  <span>Nueva Sala de Espera</span>
                 </button>
               </div>
             )}
@@ -528,11 +724,22 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
           <button
             type="button"
-            onClick={handleExportCSV}
-            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors"
+            onClick={handleExportExcel}
+            className="flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-md shadow-emerald-600/30 border border-emerald-500/40 transition-all"
+            title="Descargar libro Excel completo (.xlsx) con notas y reactivos"
           >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-            <span>Exportar CSV</span>
+            <FileSpreadsheet className="w-4 h-4 text-white" />
+            <span>Descargar Excel (.xlsx)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleExportCSV}
+            className="flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors"
+            title="Descargar versión ligera en CSV"
+          >
+            <Download className="w-3.5 h-3.5 text-slate-400" />
+            <span>CSV</span>
           </button>
         </div>
       </div>

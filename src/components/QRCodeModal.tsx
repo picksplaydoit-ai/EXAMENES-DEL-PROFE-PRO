@@ -19,10 +19,10 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      // Create student URL (pointing to base URL without teacher query)
-      const url = new URL(window.location.href);
-      url.searchParams.delete('role');
+      // Create clean student URL with student_only mode (completely isolated from teacher view)
+      const url = new URL(window.location.origin + window.location.pathname);
       url.searchParams.set('role', 'student');
+      url.searchParams.set('mode', 'student_only');
       setStudentUrl(url.toString());
 
       QRCode.toDataURL(
@@ -78,10 +78,10 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
         </div>
 
         <h3 className="text-xl font-black text-white">
-          Código QR del Examen
+          Código QR de Acceso para Alumnos
         </h3>
-        <p className="text-xs text-slate-400 mt-1 max-w-xs mx-auto">
-          Muestra este código en el proyector de tu clase para que los alumnos lo escaneen con su celular e ingresen de inmediato.
+        <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+          Muestra este código en el proyector. Al escanearlo, los alumnos entrarán <strong className="text-emerald-400">exclusivamente a su vista de examen</strong> sin acceso al panel del profesor ni a la configuración.
         </p>
 
         {/* QR Code Container */}

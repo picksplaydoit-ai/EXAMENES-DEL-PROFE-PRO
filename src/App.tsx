@@ -13,7 +13,8 @@ import { firebaseService } from './services/firebaseService';
 import { ShieldCheck, GraduationCap, Monitor, ExternalLink, HelpCircle, Sparkles } from 'lucide-react';
 
 export default function App() {
-  const [currentRole, setCurrentRole] = useState<'student' | 'teacher'>('student');
+  const [currentRole, setCurrentRole] = useState<'student' | 'teacher'>('teacher');
+  const [isStudentOnly, setIsStudentOnly] = useState(false);
   const [isFirebaseModalOpen, setIsFirebaseModalOpen] = useState(false);
   const [isDeployModalOpen, setIsDeployModalOpen] = useState(false);
   const [isFirebaseConnected, setIsFirebaseConnected] = useState(false);
@@ -25,10 +26,19 @@ export default function App() {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const roleParam = params.get('role');
-      if (roleParam === 'teacher') {
-        setCurrentRole('teacher');
-      } else if (roleParam === 'student') {
+      const modeParam = params.get('mode');
+
+      // If accessed via QR code with mode=student_only or role=student, lock exclusively to student view
+      if (modeParam === 'student_only' || roleParam === 'student') {
         setCurrentRole('student');
+        setIsStudentOnly(true);
+      } else if (roleParam === 'teacher') {
+        setCurrentRole('teacher');
+        setIsStudentOnly(false);
+      } else {
+        // Default without parameters: show Teacher panel so the proctor room is immediately available
+        setCurrentRole('teacher');
+        setIsStudentOnly(false);
       }
     }
   }, []);
@@ -38,6 +48,10 @@ export default function App() {
     if (typeof window !== 'undefined') {
       const url = new URL(window.location.href);
       url.searchParams.set('role', role);
+      if (role === 'teacher') {
+        url.searchParams.delete('mode');
+        setIsStudentOnly(false);
+      }
       window.history.replaceState({}, '', url.toString());
     }
   };
@@ -55,12 +69,16 @@ export default function App() {
         onOpenFirebaseConfig={() => setIsFirebaseModalOpen(true)}
         onOpenDeployModal={() => setIsDeployModalOpen(true)}
         isFirebaseConnected={isFirebaseConnected}
+        isStudentOnly={isStudentOnly}
       />
 
       {/* Main Content Area */}
       <main className="flex-1">
         {currentRole === 'student' ? (
-          <StudentView onSwitchToTeacher={() => handleRoleChange('teacher')} />
+          <StudentView 
+            isStudentOnly={isStudentOnly}
+            onSwitchToTeacher={isStudentOnly ? undefined : () => handleRoleChange('teacher')} 
+          />
         ) : (
           <TeacherView 
             onOpenFirebaseConfig={() => setIsFirebaseModalOpen(true)}
@@ -78,24 +96,45 @@ export default function App() {
             <span>Supervisión proctoring con <code className="text-indigo-400">visibilitychange</code> + Generador QR</span>
           </div>
 
-          <div className="flex items-center space-x-4">
-            <button
-              type="button"
-              onClick={() => setIsDeployModalOpen(true)}
-              className="text-indigo-400 hover:text-indigo-300 transition-colors flex items-center space-x-1"
-            >
-              <span>Descargar HTML Autónomo / Vercel</span>
-              <ExternalLink className="w-3 h-3" />
-            </button>
-            <span>•</span>
-            <button
-              type="button"
-              onClick={() => setIsFirebaseModalOpen(true)}
-              className="text-amber-400 hover:text-amber-300 transition-colors"
-            >
-              {isFirebaseConnected ? 'Firebase Conectado' : 'Configurar Firebase RTDB'}
-            </button>
-          </div>
+          {isStudentOnly ? (
+            <div className="flex items-center space-x-3 text-slate-400 text-xs">
+              <span className="flex items-center space-x-1.5 text-emerald-400 font-semibold">
+                <ShieldCheck className="w-4 h-4" />
+                <span>Examen Supervisado en Tiempo Real</span>
+              </span>
+              <span>•</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsStudentOnly(false);
+                  handleRoleChange('teacher');
+                }}
+                className="text-[11px] text-slate-600 hover:text-slate-400 transition-colors"
+                title="Acceso exclusivo para el docente"
+              >
+                Acceso Docente
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center space-x-4">
+              <button
+                type="button"
+                onClick={() => setIsDeployModalOpen(true)}
+                className="text-indigo-400 hover:text-indigo-300 transition-colors flex items-center space-x-1"
+              >
+                <span>Descargar HTML Autónomo / Vercel</span>
+                <ExternalLink className="w-3 h-3" />
+              </button>
+              <span>•</span>
+              <button
+                type="button"
+                onClick={() => setIsFirebaseModalOpen(true)}
+                className="text-amber-400 hover:text-amber-300 transition-colors"
+              >
+                {isFirebaseConnected ? 'Firebase Conectado' : 'Configurar Firebase RTDB'}
+              </button>
+            </div>
+          )}
         </div>
       </footer>
 
