@@ -270,8 +270,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   };
 
   // Start Exam For Everyone
-  const handleStartExamForEveryone = async () => {
-    const duration = Math.max(1, customDurationMinutes || 20);
+  const handleStartExamForEveryone = async (durationOverride?: number) => {
+    const duration = Math.max(1, durationOverride || customDurationMinutes || 20);
+    setCustomDurationMinutes(duration);
     await firebaseService.startExamForEveryone(duration);
     showNotification(`🚀 ¡Examen iniciado para todos! Temporizador global de ${duration} minutos corriendo.`);
   };
@@ -627,7 +628,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
                 <button
                   type="button"
-                  onClick={handleStartExamForEveryone}
+                  onClick={() => handleStartExamForEveryone()}
                   className="px-6 py-3.5 rounded-2xl font-black text-sm text-white bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600 hover:from-emerald-400 hover:to-indigo-500 shadow-xl shadow-emerald-500/25 transition-all flex items-center justify-center space-x-2.5 transform active:scale-95"
                 >
                   <Play className="w-5 h-5 fill-white" />
@@ -1784,6 +1785,130 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-slate-800 hover:bg-slate-700 transition-colors"
               >
                 Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          QUESTION INSPECTOR MODAL (PALOMITA ✓ / TACHE ✗ DETALLE)
+          ======================================================== */}
+      {inspectedQuestionDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+          <div className="max-w-lg w-full bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/90">
+              <div className="flex items-center space-x-3">
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm ${
+                  inspectedQuestionDetail.evaluation.status === 'correct'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                    : inspectedQuestionDetail.evaluation.status === 'incorrect'
+                    ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                    : 'bg-slate-800 text-slate-400 border border-slate-700'
+                }`}>
+                  {inspectedQuestionDetail.evaluation.status === 'correct' ? '✓' : inspectedQuestionDetail.evaluation.status === 'incorrect' ? '✗' : '-'}
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white flex items-center space-x-2">
+                    <span>Reactivo #{inspectedQuestionDetail.questionNumber}</span>
+                    <span className={`text-[11px] px-2 py-0.5 rounded-full font-bold ${
+                      inspectedQuestionDetail.evaluation.status === 'correct'
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        : inspectedQuestionDetail.evaluation.status === 'incorrect'
+                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                        : 'bg-slate-800 text-slate-400 border border-slate-700'
+                    }`}>
+                      {inspectedQuestionDetail.evaluation.status === 'correct' 
+                        ? `✓ Correcta (+${inspectedQuestionDetail.question.points} pts)` 
+                        : inspectedQuestionDetail.evaluation.status === 'incorrect' 
+                        ? '✗ Incorrecta (0 pts)' 
+                        : '⏳ Sin responder aún'}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Alumno: <strong className="text-white">{inspectedQuestionDetail.studentName}</strong> • Matrícula: <span className="text-indigo-300 font-mono">{inspectedQuestionDetail.matricula}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectedQuestionDetail(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Question Body */}
+            <div className="p-5 space-y-4 overflow-y-auto">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400 block mb-1">
+                  Enunciado de la Pregunta:
+                </span>
+                <p className="text-sm font-semibold text-white leading-relaxed bg-slate-950/70 p-3.5 rounded-xl border border-slate-800">
+                  {inspectedQuestionDetail.question.question}
+                </p>
+                {inspectedQuestionDetail.question.imageUrl && (
+                  <div className="mt-2 rounded-xl overflow-hidden border border-slate-800 bg-slate-950 max-h-48 flex items-center justify-center">
+                    <img 
+                      src={inspectedQuestionDetail.question.imageUrl} 
+                      alt="Referencia" 
+                      className="max-h-48 object-contain"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Answers Comparison */}
+              <div className="space-y-2.5">
+                <div className={`p-3 rounded-xl border ${
+                  inspectedQuestionDetail.evaluation.status === 'correct'
+                    ? 'bg-emerald-950/20 border-emerald-500/40 text-emerald-200'
+                    : inspectedQuestionDetail.evaluation.status === 'incorrect'
+                    ? 'bg-rose-950/20 border-rose-500/40 text-rose-200'
+                    : 'bg-slate-800/50 border-slate-700 text-slate-300'
+                }`}>
+                  <span className="text-[10px] uppercase font-bold tracking-wider block opacity-75">
+                    {inspectedQuestionDetail.evaluation.status === 'correct' ? '✓ Respuesta Marcada por el Alumno (Correcta):' : '✗ Respuesta Marcada por el Alumno (Incorrecta):'}
+                  </span>
+                  <p className="text-xs sm:text-sm font-bold mt-1">
+                    {inspectedQuestionDetail.evaluation.studentAnswerText}
+                  </p>
+                </div>
+
+                {inspectedQuestionDetail.evaluation.status === 'incorrect' && (
+                  <div className="p-3 rounded-xl border bg-emerald-950/20 border-emerald-500/40 text-emerald-200">
+                    <span className="text-[10px] uppercase font-bold tracking-wider block opacity-75">
+                      ✓ Clave Correcta Oficial del Reactivo:
+                    </span>
+                    <p className="text-xs sm:text-sm font-bold mt-1">
+                      {inspectedQuestionDetail.evaluation.correctAnswerText}
+                    </p>
+                  </div>
+                )}
+
+                {inspectedQuestionDetail.question.explanation && (
+                  <div className="p-3 rounded-xl border bg-indigo-950/20 border-indigo-500/30 text-indigo-200 text-xs">
+                    <span className="text-[10px] uppercase font-bold tracking-wider block text-indigo-400">
+                      Explicación / Justificación:
+                    </span>
+                    <p className="mt-1 leading-relaxed">
+                      {inspectedQuestionDetail.question.explanation}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-3.5 border-t border-slate-800 bg-slate-900/90 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setInspectedQuestionDetail(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-slate-800 hover:bg-slate-700 transition-colors"
+              >
+                Entendido / Cerrar
               </button>
             </div>
           </div>

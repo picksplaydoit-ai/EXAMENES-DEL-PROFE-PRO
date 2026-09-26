@@ -277,6 +277,27 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
               </div>
 
               <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={handleStartClick}
+                  className="py-2.5 px-3 rounded-xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-500 shadow-md shadow-emerald-600/30 transition-all flex items-center justify-center space-x-1.5"
+                  title="Ajustar y reiniciar tiempo del examen para todos"
+                >
+                  <Play className="w-3.5 h-3.5 fill-white" />
+                  <span>Re-iniciar Tiempo</span>
+                </button>
+
+                {onPauseExam && (
+                  <button
+                    type="button"
+                    onClick={onPauseExam}
+                    className="py-2.5 px-3 rounded-xl font-semibold text-xs text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors flex items-center space-x-1.5"
+                  >
+                    <Pause className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Pausar</span>
+                  </button>
+                )}
+
                 {onFinishExam && (
                   <button
                     type="button"
@@ -287,27 +308,27 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
                     <span>Finalizar y Descargar Excel</span>
                   </button>
                 )}
-
-                {onPauseExam && (
-                  <button
-                    type="button"
-                    onClick={onPauseExam}
-                    className="py-2.5 px-3.5 rounded-xl font-semibold text-xs text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors flex items-center space-x-1.5"
-                  >
-                    <Pause className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Pausar</span>
-                  </button>
-                )}
               </div>
             </div>
           )}
 
           {/* Action state: Finished Exam */}
           {isSessionFinished && (
-            <div className="space-y-2 pt-1">
+            <div className="space-y-3 pt-1">
               <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-semibold flex items-center justify-between">
-                <span>El examen ha concluido. Todos los envíos están registrados.</span>
+                <span>El examen anterior concluyó. Puedes iniciar uno nuevo para los alumnos conectados.</span>
               </div>
+
+              {/* Big Start Exam button for finished state */}
+              <button
+                type="button"
+                onClick={handleStartClick}
+                className="w-full py-3.5 px-4 rounded-xl font-black text-sm text-white bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600 hover:from-emerald-400 hover:to-indigo-500 shadow-xl shadow-emerald-500/25 transition-all flex items-center justify-center space-x-2 transform active:scale-[0.98]"
+              >
+                <Play className="w-5 h-5 fill-white" />
+                <span>🚀 INICIAR NUEVO EXAMEN AHORA ({durationMinutes} MIN)</span>
+              </button>
+
               <div className="flex items-center space-x-2">
                 {onExportExcel && (
                   <button
