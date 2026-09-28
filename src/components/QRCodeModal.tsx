@@ -49,6 +49,21 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
   const [remainingSeconds, setRemainingSeconds] = useState<number>(initialDurationMinutes * 60);
   const [hasStartedAction, setHasStartedAction] = useState(false);
 
+  // Custom origin support (e.g. Vercel, public preview, or local IP)
+  const [customOrigin, setCustomOrigin] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('quimica_custom_student_base_url');
+      if (saved) return saved;
+      const origin = window.location.origin;
+      if (origin.includes('ais-dev-')) {
+        return origin.replace('ais-dev-', 'ais-pre-');
+      }
+      return origin;
+    }
+    return '';
+  });
+  const [isEditingUrl, setIsEditingUrl] = useState(false);
+
   useEffect(() => {
     if (globalSession?.durationMinutes) {
       setDurationMinutes(globalSession.durationMinutes);
@@ -57,30 +72,43 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      // Create clean student URL with student_only mode (completely isolated from teacher view)
-      const url = new URL(window.location.origin + window.location.pathname);
-      url.searchParams.set('role', 'student');
-      url.searchParams.set('mode', 'student_only');
-      setStudentUrl(url.toString());
-
-      QRCode.toDataURL(
-        url.toString(),
-        {
-          width: 440,
-          margin: 2,
-          color: {
-            dark: '#090d16', // deep dark
-            light: '#ffffff'
-          }
-        },
-        (err, dataUrl) => {
-          if (!err && dataUrl) {
-            setQrDataUrl(dataUrl);
-          }
+      try {
+        let base = customOrigin.trim() || window.location.origin;
+        if (!base.startsWith('http://') && !base.startsWith('https://')) {
+          base = `https://${base}`;
         }
-      );
+        const url = new URL(base);
+        url.pathname = window.location.pathname;
+        url.searchParams.set('role', 'student');
+        url.searchParams.set('mode', 'student_only');
+        const computedUrl = url.toString();
+        setStudentUrl(computedUrl);
+
+        QRCode.toDataURL(
+          computedUrl,
+          {
+            width: 440,
+            margin: 2,
+            color: {
+              dark: '#090d16', // deep dark
+              light: '#ffffff'
+            }
+          },
+          (err, dataUrl) => {
+            if (!err && dataUrl) {
+              setQrDataUrl(dataUrl);
+            }
+          }
+        );
+      } catch {
+        // Fallback to window origin
+        const fallbackUrl = new URL(window.location.origin + window.location.pathname);
+        fallbackUrl.searchParams.set('role', 'student');
+        fallbackUrl.searchParams.set('mode', 'student_only');
+        setStudentUrl(fallbackUrl.toString());
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, customOrigin]);
 
   // Synchronized countdown timer when session is active
   useEffect(() => {
@@ -355,19 +383,77 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
           )}
         </div>
 
-        {/* Link preview & Copy */}
-        <div className="bg-slate-800/90 border border-slate-700 rounded-xl p-2.5 flex items-center justify-between text-xs text-slate-300 mb-4">
-          <span className="truncate max-w-[260px] sm:max-w-[320px] font-mono text-[11px] text-indigo-300">
-            {studentUrl}
-          </span>
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="ml-2 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold shrink-0 transition-colors flex items-center space-x-1"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>{copied ? 'Copiado' : 'Copiar Enlace'}</span>
-          </button>
+        {/* Link preview & Copy & Open */}
+        <div className="space-y-2 mb-4">
+          <div className="bg-slate-800/90 border border-slate-700 rounded-xl p-2.5 flex items-center justify-between text-xs text-slate-300">
+            <span className="truncate max-w-[240px] sm:max-w-[300px] font-mono text-[11px] text-indigo-300" title={studentUrl}>
+              {studentUrl}
+            </span>
+            <div className="flex items-center space-x-1.5 ml-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition-colors flex items-center space-x-1"
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copied ? 'Copiado' : 'Copiar'}</span>
+              </button>
+              <a
+                href={studentUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-bold transition-colors flex items-center space-x-1"
+                title="Abrir en nueva pestaña para probar el examen como alumno"
+              >
+                <span>Probar</span>
+                <span className="text-xs">↗</span>
+              </a>
+            </div>
+          </div>
+
+          {/* Quick Domain Editor for Phones / Deployments */}
+          <div className="text-left">
+            <button
+              type="button"
+              onClick={() => setIsEditingUrl(!isEditingUrl)}
+              className="text-[11px] text-indigo-400 hover:text-indigo-300 underline font-medium"
+            >
+              {isEditingUrl ? '▲ Ocultar configuración de URL' : '⚙️ ¿Vas a proyectar para celulares de alumnos? Configurar dominio'}
+            </button>
+
+            {isEditingUrl && (
+              <div className="mt-2 p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-2 text-xs">
+                <p className="text-slate-400 text-[11px] leading-relaxed">
+                  Si tus alumnos escanean el código QR desde sus teléfonos celulares, ingresa la <strong>URL pública</strong> de tu examen (por ejemplo tu enlace de Vercel, Firebase Hosting o dominio público):
+                </p>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    value={customOrigin}
+                    onChange={(e) => {
+                      setCustomOrigin(e.target.value);
+                      localStorage.setItem('quimica_custom_student_base_url', e.target.value);
+                    }}
+                    placeholder="https://mi-examen.vercel.app"
+                    className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const def = window.location.origin.includes('ais-dev-') 
+                        ? window.location.origin.replace('ais-dev-', 'ais-pre-')
+                        : window.location.origin;
+                      setCustomOrigin(def);
+                      localStorage.removeItem('quimica_custom_student_base_url');
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-[11px]"
+                  >
+                    Restablecer
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Secondary Actions */}

@@ -785,6 +785,8 @@ class FirebaseDualService {
   }
 
   public async syncStudent(student: StudentExamState): Promise<void> {
+    const cleanId = (student.id || student.matricula || 'ALUMNO').trim().toUpperCase().replace(/[/\\]/g, '_');
+    student.id = cleanId;
     this.localStudentsCache[student.id] = student;
     this.saveLocalCache();
 

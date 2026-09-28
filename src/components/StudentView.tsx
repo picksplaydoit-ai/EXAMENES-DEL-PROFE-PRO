@@ -121,6 +121,9 @@ export const StudentView: React.FC<StudentViewProps> = ({
         const isSameExam = !parsed.examTitle || parsed.examTitle === currentExam.title;
         if (!isSameExam) {
           localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
+          setIsRegistered(false);
+          setIsExamStarted(false);
+          setExamStatus('not_started');
           return;
         }
 
@@ -135,6 +138,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
           if (parsed.selectedAnswers) setSelectedAnswers(parsed.selectedAnswers);
           if (typeof parsed.warningsCount === 'number') setWarningsCount(parsed.warningsCount);
           if (Array.isArray(parsed.cheatLogs)) setCheatLogs(parsed.cheatLogs);
+        } else {
+          setIsRegistered(false);
+          setIsExamStarted(false);
+          setExamStatus('not_started');
         }
       }
     } catch (e) {
@@ -184,6 +191,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
             const parsed = JSON.parse(raw);
             if (parsed.examTitle && parsed.examTitle !== data.title) {
               localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
+              setIsRegistered(false);
               setIsExamStarted(false);
               setExamStatus('not_started');
               setSelectedAnswers({});
@@ -499,8 +507,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
     }
 
     soundManager.playClick();
+    const isActiveSession = globalSession.status === 'active';
+
     setIsRegistered(true);
-    setExamStatus('waiting');
+    setIsExamStarted(isActiveSession);
+    setExamStatus(isActiveSession ? 'in_progress' : 'waiting');
     setWarningsCount(0);
     setCheatLogs([]);
     setSelectedAnswers({});
@@ -512,8 +523,9 @@ export const StudentView: React.FC<StudentViewProps> = ({
       fullName: fullName.trim(),
       examId: 'quimica_general_2026',
       examTitle: examData.title,
-      status: 'waiting',
+      status: isActiveSession ? 'in_progress' : 'waiting',
       joinedWaitingAt: Date.now(),
+      startedAt: isActiveSession ? Date.now() : undefined,
       currentQuestionIndex: 0,
       answers: {},
       score: 0,
@@ -654,7 +666,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
       {/* ========================================================
           STAGE 1: LOGIN & RULES FORM
           ======================================================== */}
-      {!isRegistered && examStatus === 'not_started' && (
+      {(!isRegistered || examStatus === 'not_started') && (
         <div className="bg-slate-800/80 rounded-3xl border border-slate-700/80 p-6 sm:p-10 shadow-2xl backdrop-blur-xl">
           <div className="text-center max-w-2xl mx-auto mb-8">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 shadow-xl shadow-indigo-500/25 mb-4 text-white">
@@ -664,7 +676,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
               {examData.title}
             </h1>
             <p className="text-slate-400 mt-2 text-xs sm:text-sm">
-              Ingresa tus datos oficiales para unirte a la <strong>Sala de Espera</strong> del examen.
+              Ingresa tus datos oficiales para ingresar a la evaluación supervisada.
             </p>
 
             {/* Anti-Copy and Live Info Badges */}
@@ -739,7 +751,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
                   </h4>
                   <ul className="list-disc pl-4 space-y-1 text-slate-300 text-xs">
                     <li>
-                      <strong>Sala de Espera:</strong> Al entrar esperarás a que el profesor inicie el temporizador para todos.
+                      <strong>Supervisión en vivo:</strong> El profesor monitorea tus respuestas y avances en tiempo real.
                     </li>
                     <li>
                       <strong>Detección de pestañas:</strong> Si sales de la pestaña o minimizas el navegador, se registrará una infracción.
@@ -776,7 +788,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
               disabled={!hasAcceptedRules || !fullName.trim() || !matricula.trim()}
               className="w-full py-3.5 px-6 rounded-xl font-bold text-sm tracking-wide text-white bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center space-x-2"
             >
-              <span>Entrar a la Sala de Espera</span>
+              <span>{globalSession.status === 'active' ? 'Iniciar Examen Ahora' : 'Entrar a la Sala de Espera'}</span>
               <ChevronRight className="w-4 h-4" />
             </button>
           </form>
@@ -807,13 +819,18 @@ export const StudentView: React.FC<StudentViewProps> = ({
           session={globalSession}
           connectedStudents={allConnectedStudents}
           onExitWaitingRoom={handleExitWaitingRoom}
+          onStartNow={() => {
+            setIsExamStarted(true);
+            setExamStatus('in_progress');
+            syncToCloud('in_progress');
+          }}
         />
       )}
 
       {/* ========================================================
           STAGE 3: ACTIVE EXAM IN PROGRESS
           ======================================================== */}
-      {isExamStarted && examStatus === 'in_progress' && currentQ && (
+      {isRegistered && (isExamStarted || examStatus === 'in_progress') && (
         <div className="space-y-6">
           {/* Proctoring Bar */}
           <div className="bg-slate-800/90 rounded-2xl border border-slate-700/80 p-4 sm:p-5 shadow-lg backdrop-blur-md flex flex-wrap items-center justify-between gap-4">
@@ -825,9 +842,17 @@ export const StudentView: React.FC<StudentViewProps> = ({
                 <h3 className="text-sm font-bold text-white truncate max-w-[200px] sm:max-w-none">
                   {fullName}
                 </h3>
-                <p className="text-xs text-slate-400 font-mono">
-                  Matrícula: <span className="text-indigo-300 font-semibold">{matricula.toUpperCase()}</span>
-                </p>
+                <div className="flex items-center space-x-2 text-xs text-slate-400 font-mono">
+                  <span>Matrícula: <span className="text-indigo-300 font-semibold">{matricula.toUpperCase()}</span></span>
+                  <span>•</span>
+                  <button
+                    type="button"
+                    onClick={handleExitWaitingRoom}
+                    className="text-[11px] text-slate-500 hover:text-slate-300 underline"
+                  >
+                    Salir / Cambiar datos
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -858,89 +883,109 @@ export const StudentView: React.FC<StudentViewProps> = ({
             </div>
           </div>
 
-          {/* Progress Indicator */}
-          <div className="bg-slate-800/60 rounded-2xl border border-slate-700/60 p-3 sm:p-4">
-            <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-slate-400 mb-2 font-medium">
-              <div className="flex items-center space-x-2">
-                <span className="font-bold text-slate-200">Pregunta {currentQuestionIdx + 1} de {studentQuestions.length}</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 font-semibold hidden sm:inline">
-                  🛡️ Orden Aleatorio Anti-Copia
-                </span>
+          {!currentQ ? (
+            <div className="bg-slate-800/90 rounded-3xl border border-slate-700/80 p-8 text-center space-y-4 shadow-xl">
+              <Atom className="w-12 h-12 text-indigo-400 mx-auto animate-spin" />
+              <h3 className="text-lg font-bold text-white">Sincronizando preguntas del examen...</h3>
+              <p className="text-xs text-slate-400 max-w-md mx-auto">
+                Cargando el banco de reactivos asignado por el profesor ({examData.title}).
+              </p>
+              <button
+                type="button"
+                onClick={handleManualSyncExam}
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-bold text-white shadow-lg transition-colors inline-flex items-center space-x-2"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingExam ? 'animate-spin' : ''}`} />
+                <span>Recargar Reactivos Ahora</span>
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Progress Indicator */}
+              <div className="bg-slate-800/60 rounded-2xl border border-slate-700/60 p-3 sm:p-4">
+                <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-slate-400 mb-2 font-medium">
+                  <div className="flex items-center space-x-2">
+                    <span className="font-bold text-slate-200">Pregunta {currentQuestionIdx + 1} de {studentQuestions.length}</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 font-semibold hidden sm:inline">
+                      🛡️ Orden Aleatorio Anti-Copia
+                    </span>
+                  </div>
+                  <span>{answeredCount} respondidas ({Math.round((answeredCount / (studentQuestions.length || 1)) * 100)}%)</span>
+                </div>
+                <div className="w-full bg-slate-700/50 h-2 rounded-full overflow-hidden">
+                  <div
+                    className="bg-gradient-to-r from-indigo-500 to-pink-500 h-full rounded-full transition-all duration-300"
+                    style={{ width: `${(answeredCount / (studentQuestions.length || 1)) * 100}%` }}
+                  />
+                </div>
+
+                {/* Quick Question Bubble Selector */}
+                <div className="flex items-center space-x-2 mt-3 overflow-x-auto pb-1">
+                  {studentQuestions.map((q, idx) => {
+                    const isAnswered = selectedAnswers[q.id] !== undefined;
+                    const isCurrent = idx === currentQuestionIdx;
+                    return (
+                      <button
+                        key={q.id}
+                        type="button"
+                        onClick={() => setCurrentQuestionIdx(idx)}
+                        className={`w-8 h-8 rounded-xl text-xs font-bold flex items-center justify-center transition-all ${
+                          isCurrent
+                            ? 'bg-indigo-600 text-white ring-2 ring-indigo-400'
+                            : isAnswered
+                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                            : 'bg-slate-800 text-slate-400 border border-slate-700 hover:text-white'
+                        }`}
+                      >
+                        {idx + 1}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-              <span>{answeredCount} respondidas ({Math.round((answeredCount / (studentQuestions.length || 1)) * 100)}%)</span>
-            </div>
-            <div className="w-full bg-slate-700/50 h-2 rounded-full overflow-hidden">
-              <div
-                className="bg-gradient-to-r from-indigo-500 to-pink-500 h-full rounded-full transition-all duration-300"
-                style={{ width: `${(answeredCount / (studentQuestions.length || 1)) * 100}%` }}
+
+              {/* Dynamic Question Card (Supports multiple choice, open-ended, matching + image) */}
+              <QuestionCard
+                question={currentQ}
+                questionNumber={currentQuestionIdx + 1}
+                currentAnswer={selectedAnswers[currentQ.id]}
+                onAnswerChange={handleAnswerChange}
               />
-            </div>
 
-            {/* Quick Question Bubble Selector */}
-            <div className="flex items-center space-x-2 mt-3 overflow-x-auto pb-1">
-              {studentQuestions.map((q, idx) => {
-                const isAnswered = selectedAnswers[q.id] !== undefined;
-                const isCurrent = idx === currentQuestionIdx;
-                return (
+              {/* Navigation Controls */}
+              <div className="flex items-center justify-between pt-2">
+                <button
+                  type="button"
+                  onClick={() => setCurrentQuestionIdx((prev) => Math.max(0, prev - 1))}
+                  disabled={currentQuestionIdx === 0}
+                  className="flex items-center space-x-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed bg-slate-900/60 border border-slate-700 hover:border-slate-600 transition-all"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  <span>Anterior</span>
+                </button>
+
+                {currentQuestionIdx < studentQuestions.length - 1 ? (
                   <button
-                    key={q.id}
                     type="button"
-                    onClick={() => setCurrentQuestionIdx(idx)}
-                    className={`w-8 h-8 rounded-xl text-xs font-bold flex items-center justify-center transition-all ${
-                      isCurrent
-                        ? 'bg-indigo-600 text-white ring-2 ring-indigo-400'
-                        : isAnswered
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                        : 'bg-slate-800 text-slate-400 border border-slate-700 hover:text-white'
-                    }`}
+                    onClick={() => setCurrentQuestionIdx((prev) => Math.min(studentQuestions.length - 1, prev + 1))}
+                    className="flex items-center space-x-1.5 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 shadow-md shadow-indigo-600/20 transition-all"
                   >
-                    {idx + 1}
+                    <span>Siguiente</span>
+                    <ChevronRight className="w-4 h-4" />
                   </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Dynamic Question Card (Supports multiple choice, open-ended, matching + image) */}
-          <QuestionCard
-            question={currentQ}
-            questionNumber={currentQuestionIdx + 1}
-            currentAnswer={selectedAnswers[currentQ.id]}
-            onAnswerChange={handleAnswerChange}
-          />
-
-          {/* Navigation Controls */}
-          <div className="flex items-center justify-between pt-2">
-            <button
-              type="button"
-              onClick={() => setCurrentQuestionIdx((prev) => Math.max(0, prev - 1))}
-              disabled={currentQuestionIdx === 0}
-              className="flex items-center space-x-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed bg-slate-900/60 border border-slate-700 hover:border-slate-600 transition-all"
-            >
-              <ChevronLeft className="w-4 h-4" />
-              <span>Anterior</span>
-            </button>
-
-            {currentQuestionIdx < studentQuestions.length - 1 ? (
-              <button
-                type="button"
-                onClick={() => setCurrentQuestionIdx((prev) => Math.min(studentQuestions.length - 1, prev + 1))}
-                className="flex items-center space-x-1.5 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 shadow-md shadow-indigo-600/20 transition-all"
-              >
-                <span>Siguiente</span>
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setIsSubmitConfirmOpen(true)}
-                className="flex items-center space-x-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-600/30 transition-all"
-              >
-                <Send className="w-4 h-4" />
-                <span>Finalizar Examen</span>
-              </button>
-            )}
-          </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setIsSubmitConfirmOpen(true)}
+                    className="flex items-center space-x-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-600/30 transition-all"
+                  >
+                    <Send className="w-4 h-4" />
+                    <span>Finalizar Examen</span>
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       )}
 

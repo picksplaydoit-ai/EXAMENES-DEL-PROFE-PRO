@@ -19,13 +19,15 @@ interface StudentWaitingRoomProps {
   session: GlobalSessionState;
   connectedStudents: StudentExamState[];
   onExitWaitingRoom: () => void;
+  onStartNow?: () => void;
 }
 
 export const StudentWaitingRoom: React.FC<StudentWaitingRoomProps> = ({
   student,
   session,
   connectedStudents,
-  onExitWaitingRoom
+  onExitWaitingRoom,
+  onStartNow
 }) => {
   const [isMusicPlaying, setIsMusicPlaying] = useState(false);
   const waitingPeers = connectedStudents.filter(
@@ -90,13 +92,36 @@ export const StudentWaitingRoom: React.FC<StudentWaitingRoomProps> = ({
 
         {/* Waiting Message */}
         <div className="mt-6 max-w-lg mx-auto bg-slate-950/70 border border-slate-800 rounded-2xl p-4 sm:p-5">
-          <div className="flex items-center justify-center space-x-2 text-indigo-300 font-bold text-sm sm:text-base animate-pulse">
-            <span className="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-ping" />
-            <span>Esperando a que el profesor inicie el examen...</span>
-          </div>
-          <p className="text-xs text-slate-400 mt-2">
-            Permanece en esta pantalla. En cuanto el docente presione <strong>"Comenzar Examen para Todos"</strong>, tu prueba se activará automáticamente con el temporizador global sincronizado.
-          </p>
+          {session.status === 'active' ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-center space-x-2 text-emerald-400 font-bold text-sm sm:text-base">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                <span>¡El examen ya está en curso!</span>
+              </div>
+              <p className="text-xs text-slate-300">
+                El docente ha dado la señal de inicio. El temporizador global está corriendo.
+              </p>
+              {onStartNow && (
+                <button
+                  type="button"
+                  onClick={onStartNow}
+                  className="w-full py-3 px-4 rounded-xl font-black text-sm text-white bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 shadow-lg shadow-emerald-500/30 transition-all"
+                >
+                  🚀 COMENZAR A RESPONDER AHORA
+                </button>
+              )}
+            </div>
+          ) : (
+            <div>
+              <div className="flex items-center justify-center space-x-2 text-indigo-300 font-bold text-sm sm:text-base animate-pulse">
+                <span className="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-ping" />
+                <span>Esperando a que el profesor inicie el examen...</span>
+              </div>
+              <p className="text-xs text-slate-400 mt-2">
+                Permanece en esta pantalla. En cuanto el docente presione <strong>"Comenzar Examen para Todos"</strong>, tu prueba se activará automáticamente con el temporizador global sincronizado.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Exam Params Quick Info */}
