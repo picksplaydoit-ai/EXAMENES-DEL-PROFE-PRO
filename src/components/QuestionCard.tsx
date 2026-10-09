@@ -22,6 +22,8 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
   // Type badge color and text
   const getTypeBadge = () => {
     switch (question.type) {
+      case 'verdadero_falso':
+        return { label: 'Verdadero o Falso', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' };
       case 'relacionar':
         return { label: 'Relacionar Columnas', color: 'bg-purple-500/20 text-purple-300 border-purple-500/30' };
       case 'abierta':
@@ -136,6 +138,81 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
       )}
 
       {/* ========================================================
+          TYPE: VERDADERO_FALSO
+          ======================================================== */}
+      {question.type === 'verdadero_falso' && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          {/* VERDADERO (Index 0 / true) */}
+          {(() => {
+            const isSelected = currentAnswer === 0 || currentAnswer === true || currentAnswer === 'Verdadero';
+            return (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => onAnswerChange(question.id, 0)}
+                className={`p-5 rounded-2xl border transition-all flex items-center justify-between space-x-3 text-left ${
+                  isSelected
+                    ? 'bg-emerald-600/30 border-emerald-500 text-white shadow-lg shadow-emerald-500/20 ring-2 ring-emerald-500'
+                    : 'bg-slate-900/70 border-slate-700/80 text-slate-300 hover:bg-slate-900 hover:border-emerald-500/40'
+                }`}
+              >
+                <div className="flex items-center space-x-3">
+                  <div className={`w-9 h-9 rounded-xl font-bold flex items-center justify-center text-sm ${
+                    isSelected ? 'bg-emerald-500 text-white' : 'bg-emerald-500/20 text-emerald-400'
+                  }`}>
+                    ✓
+                  </div>
+                  <div>
+                    <span className="text-base font-black tracking-wide block">
+                      VERDADERO
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      La afirmación es correcta
+                    </span>
+                  </div>
+                </div>
+                {isSelected && <CheckCircle2 className="w-6 h-6 text-emerald-400 shrink-0" />}
+              </button>
+            );
+          })()}
+
+          {/* FALSO (Index 1 / false) */}
+          {(() => {
+            const isSelected = currentAnswer === 1 || currentAnswer === false || currentAnswer === 'Falso';
+            return (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => onAnswerChange(question.id, 1)}
+                className={`p-5 rounded-2xl border transition-all flex items-center justify-between space-x-3 text-left ${
+                  isSelected
+                    ? 'bg-rose-600/30 border-rose-500 text-white shadow-lg shadow-rose-500/20 ring-2 ring-rose-500'
+                    : 'bg-slate-900/70 border-slate-700/80 text-slate-300 hover:bg-slate-900 hover:border-rose-500/40'
+                }`}
+              >
+                <div className="flex items-center space-x-3">
+                  <div className={`w-9 h-9 rounded-xl font-bold flex items-center justify-center text-sm ${
+                    isSelected ? 'bg-rose-500 text-white' : 'bg-rose-500/20 text-rose-400'
+                  }`}>
+                    ✗
+                  </div>
+                  <div>
+                    <span className="text-base font-black tracking-wide block">
+                      FALSO
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      La afirmación es incorrecta
+                    </span>
+                  </div>
+                </div>
+                {isSelected && <CheckCircle2 className="w-6 h-6 text-rose-400 shrink-0" />}
+              </button>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* ========================================================
           TYPE 2: ABIERTA (DESARROLLO)
           ======================================================== */}
       {question.type === 'abierta' && (
@@ -173,8 +250,8 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
               const studentMatches: Record<string, string> = currentAnswer || {};
               const currentPick = studentMatches[pair.id] || '';
 
-              // Available right side options
-              const rightOptions = question.pairs!.map((p) => p.right);
+              // Available right side options (sorted alphabetically so order is not identical to left column)
+              const rightOptions = Array.from(new Set(question.pairs!.map((p) => p.right))).sort((a, b) => a.localeCompare(b));
 
               return (
                 <div

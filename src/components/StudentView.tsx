@@ -89,12 +89,36 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [activeWarningModal, setActiveWarningModal] = useState<number | null>(null);
   const [isSubmitConfirmOpen, setIsSubmitConfirmOpen] = useState(false);
   const [examSubmittedTime, setExamSubmittedTime] = useState<number | undefined>(undefined);
+  const [examStartTime, setExamStartTime] = useState<number | undefined>(undefined);
 
   // 0. On mount, explicitly pull fresh active exam from Firestore to ensure teacher's latest exam is loaded
   useEffect(() => {
     firebaseService.fetchActiveExam(true).then((fresh) => {
       if (fresh && Array.isArray(fresh.questions) && fresh.questions.length > 0) {
         setExamData(fresh);
+
+        // Verify if any saved student session in localStorage belongs to an older or different exam
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY_STUDENT_SESSION);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            const isMatch = 
+              parsed.examTitle === fresh.title &&
+              (!parsed.examId || !fresh.examId || parsed.examId === fresh.examId) &&
+              (!parsed.questionCount || parsed.questionCount === fresh.questions.length);
+
+            if (!isMatch) {
+              localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
+              setIsRegistered(false);
+              setIsExamStarted(false);
+              setExamStatus('not_started');
+              setSelectedAnswers({});
+              setCurrentQuestionIdx(0);
+            }
+          }
+        } catch {
+          // Ignore
+        }
       }
     });
   }, []);
@@ -104,7 +128,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
     const randomized = randomizeExamForStudent(
       examData.questions || [],
       matricula || 'STUDENT_PREVIEW',
-      examData.updatedAt || examData.title
+      examData.updatedAt || examData.examId || examData.title
     );
     setStudentQuestions(randomized);
   }, [examData, matricula]);
@@ -118,12 +142,18 @@ export const StudentView: React.FC<StudentViewProps> = ({
         const currentExam = firebaseService.getActiveExam();
         
         // If the saved session is from a different exam or older version, discard stale attempt
-        const isSameExam = !parsed.examTitle || parsed.examTitle === currentExam.title;
+        const isSameExam = 
+          parsed.examTitle === currentExam.title &&
+          (!parsed.examId || !currentExam.examId || parsed.examId === currentExam.examId) &&
+          (!parsed.questionCount || parsed.questionCount === (currentExam.questions || []).length);
+
         if (!isSameExam) {
           localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
           setIsRegistered(false);
           setIsExamStarted(false);
           setExamStatus('not_started');
+          setSelectedAnswers({});
+          setCurrentQuestionIdx(0);
           return;
         }
 
@@ -133,6 +163,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
           setHasAcceptedRules(Boolean(parsed.hasAcceptedRules));
           setIsRegistered(Boolean(parsed.isRegistered));
           setIsExamStarted(Boolean(parsed.isExamStarted));
+          if (typeof parsed.examStartTime === 'number') {
+            setExamStartTime(parsed.examStartTime);
+          } else if (typeof parsed.startedAt === 'number') {
+            setExamStartTime(parsed.startedAt);
+          }
           if (parsed.examStatus) setExamStatus(parsed.examStatus);
           if (typeof parsed.currentQuestionIdx === 'number') setCurrentQuestionIdx(parsed.currentQuestionIdx);
           if (parsed.selectedAnswers) setSelectedAnswers(parsed.selectedAnswers);
@@ -163,46 +198,57 @@ export const StudentView: React.FC<StudentViewProps> = ({
           isRegistered,
           isExamStarted,
           examStatus,
+          examStartTime,
+          startedAt: examStartTime,
           currentQuestionIdx,
           selectedAnswers,
           warningsCount,
           cheatLogs,
+          examId: examData.examId,
           examTitle: examData.title,
           examUpdatedAt: examData.updatedAt,
+          questionCount: activeQuestions.length,
           savedAt: Date.now()
         }));
       }
     } catch {
       // Ignore
     }
-  }, [matricula, fullName, hasAcceptedRules, isRegistered, isExamStarted, examStatus, currentQuestionIdx, selectedAnswers, warningsCount, cheatLogs, examData.title, examData.updatedAt]);
+  }, [matricula, fullName, hasAcceptedRules, isRegistered, isExamStarted, examStatus, currentQuestionIdx, selectedAnswers, warningsCount, cheatLogs, examData.examId, examData.title, examData.updatedAt, activeQuestions.length]);
 
   // 3. Synchronize with Firebase Realtime & keep questions updated in real-time
   useEffect(() => {
     const unsubExam = firebaseService.subscribeToExam((data) => {
       if (data && Array.isArray(data.questions) && data.questions.length > 0) {
-        setExamData(data);
-        setCurrentQuestionIdx((prev) => (prev >= data.questions.length ? 0 : prev));
+        setExamData((prevExam) => {
+          const hasExamChanged = 
+            prevExam.title !== data.title ||
+            (prevExam.examId && data.examId && prevExam.examId !== data.examId) ||
+            prevExam.questions.length !== data.questions.length ||
+            prevExam.updatedAt !== data.updatedAt;
 
-        // If teacher changed the exam, reset student attempt if it was for a previous exam
-        try {
-          const raw = localStorage.getItem(STORAGE_KEY_STUDENT_SESSION);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (parsed.examTitle && parsed.examTitle !== data.title) {
-              localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
-              setIsRegistered(false);
-              setIsExamStarted(false);
-              setExamStatus('not_started');
-              setSelectedAnswers({});
-              setCurrentQuestionIdx(0);
-            }
+          if (hasExamChanged) {
+            localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
+            setSelectedAnswers({});
+            setCurrentQuestionIdx(0);
+            setIsExamStarted(false);
+            setExamStatus('not_started');
           }
-        } catch {
-          // Ignore
-        }
+          return data;
+        });
+        setCurrentQuestionIdx((prev) => (prev >= data.questions.length ? 0 : prev));
       }
     });
+
+    const handleStudentsResetEvent = () => {
+      localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
+      setSelectedAnswers({});
+      setCurrentQuestionIdx(0);
+      setIsExamStarted(false);
+      setExamStatus('not_started');
+    };
+
+    window.addEventListener('quimica:students_reset', handleStudentsResetEvent);
 
     const unsubSession = firebaseService.subscribeToGlobalSession((session) => {
       setGlobalSession(session);
@@ -216,6 +262,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
       unsubExam();
       unsubSession();
       unsubStudents();
+      window.removeEventListener('quimica:students_reset', handleStudentsResetEvent);
     };
   }, []);
 
@@ -227,6 +274,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
       const fresh = await firebaseService.fetchActiveExam(true);
       if (fresh) {
         setExamData(fresh);
+        localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
+        setSelectedAnswers({});
+        setCurrentQuestionIdx(0);
+        setIsExamStarted(false);
+        setExamStatus('not_started');
       }
     } finally {
       setTimeout(() => setIsRefreshingExam(false), 500);
@@ -237,6 +289,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const stateRef = useRef({
     isExamStarted,
     examStatus,
+    examStartTime,
+    examSubmittedTime,
     warningsCount,
     selectedAnswers,
     matricula,
@@ -251,6 +305,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
     stateRef.current = {
       isExamStarted,
       examStatus,
+      examStartTime,
+      examSubmittedTime,
       warningsCount,
       selectedAnswers,
       matricula,
@@ -274,6 +330,15 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
       if (q.type === 'opcion_multiple') {
         if (studentAns === q.correctAnswer) {
+          earnedPoints += q.points;
+        }
+      } else if (q.type === 'verdadero_falso') {
+        const isMatch = (studentAns === q.correctAnswer) ||
+          (studentAns === 0 && (q.correctAnswer === 0 || q.correctAnswer === true || q.correctAnswer === 'Verdadero')) ||
+          (studentAns === 1 && (q.correctAnswer === 1 || q.correctAnswer === false || q.correctAnswer === 'Falso')) ||
+          (studentAns === true && (q.correctAnswer === 0 || q.correctAnswer === true)) ||
+          (studentAns === false && (q.correctAnswer === 1 || q.correctAnswer === false));
+        if (isMatch) {
           earnedPoints += q.points;
         }
       } else if (q.type === 'relacionar' && q.pairs && q.pairs.length > 0) {
@@ -312,6 +377,20 @@ export const StudentView: React.FC<StudentViewProps> = ({
     const warns = warningsOverride !== undefined ? warningsOverride : stateRef.current.warningsCount;
     const logs = logsOverride || stateRef.current.cheatLogs;
 
+    // Resolve persistent startedAt: never overwrite with Date.now() on subsequent heartbeats/answers!
+    let resolvedStartedAt = stateRef.current.examStartTime;
+    if (!resolvedStartedAt && (status === 'in_progress' || status === 'submitted' || status === 'forced_submission_cheat')) {
+      resolvedStartedAt = globalSession.startedAt || Date.now();
+      setExamStartTime(resolvedStartedAt);
+    }
+
+    const isSubmitted = status === 'submitted' || status === 'forced_submission_cheat';
+    let resolvedSubmittedAt = stateRef.current.examSubmittedTime;
+    if (isSubmitted && !resolvedSubmittedAt) {
+      resolvedSubmittedAt = Date.now();
+      setExamSubmittedTime(resolvedSubmittedAt);
+    }
+
     const studentRecord: StudentExamState = {
       id: curMatricula,
       matricula: curMatricula,
@@ -319,8 +398,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
       examId: 'quimica_general_2026',
       examTitle: stateRef.current.examTitle || 'Examen de Química',
       status: status,
-      startedAt: Date.now(),
-      submittedAt: status === 'submitted' || status === 'forced_submission_cheat' ? Date.now() : undefined,
+      startedAt: resolvedStartedAt,
+      submittedAt: isSubmitted ? resolvedSubmittedAt : undefined,
       currentQuestionIndex: currentQuestionIdx,
       answers: answers,
       score: earnedPoints,
@@ -336,7 +415,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
     } catch (err) {
       console.warn('Sync diferido por bajón de internet; datos resguardados localmente:', err);
     }
-  }, [calculateScore, currentQuestionIdx]);
+  }, [calculateScore, currentQuestionIdx, globalSession.startedAt]);
 
   // Online / Offline internet drop listeners
   useEffect(() => {
@@ -382,6 +461,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
         setCountdownStartNumber(null);
         soundManager.playCountdownTick(true);
         soundManager.playSuccessChime();
+        const startTimestamp = globalSession.startedAt || Date.now();
+        setExamStartTime(startTimestamp);
         setIsExamStarted(true);
         setExamStatus('in_progress');
         syncToCloud('in_progress');
@@ -508,10 +589,14 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
     soundManager.playClick();
     const isActiveSession = globalSession.status === 'active';
+    const now = Date.now();
+    const startTimestamp = isActiveSession ? (globalSession.startedAt || now) : undefined;
 
     setIsRegistered(true);
     setIsExamStarted(isActiveSession);
     setExamStatus(isActiveSession ? 'in_progress' : 'waiting');
+    setExamStartTime(startTimestamp);
+    setExamSubmittedTime(undefined);
     setWarningsCount(0);
     setCheatLogs([]);
     setSelectedAnswers({});
@@ -524,8 +609,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
       examId: 'quimica_general_2026',
       examTitle: examData.title,
       status: isActiveSession ? 'in_progress' : 'waiting',
-      joinedWaitingAt: Date.now(),
-      startedAt: isActiveSession ? Date.now() : undefined,
+      joinedWaitingAt: now,
+      startedAt: startTimestamp,
       currentQuestionIndex: 0,
       answers: {},
       score: 0,
@@ -533,7 +618,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
       percentage: 0,
       cheatWarningsCount: 0,
       cheatLogs: [],
-      lastActive: Date.now()
+      lastActive: now
     };
     firebaseService.syncStudent(initialStudent);
   };
@@ -544,7 +629,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
       firebaseService.deleteStudent(matricula.trim().toUpperCase());
     }
     setIsRegistered(false);
+    setIsExamStarted(false);
     setExamStatus('not_started');
+    setExamStartTime(undefined);
+    setExamSubmittedTime(undefined);
   };
 
   // Handle Answer Changes
@@ -820,6 +908,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
           connectedStudents={allConnectedStudents}
           onExitWaitingRoom={handleExitWaitingRoom}
           onStartNow={() => {
+            const startTimestamp = globalSession.startedAt || Date.now();
+            setExamStartTime(startTimestamp);
             setIsExamStarted(true);
             setExamStatus('in_progress');
             syncToCloud('in_progress');
@@ -1229,6 +1319,32 @@ export const StudentView: React.FC<StudentViewProps> = ({
                             <span>{String.fromCharCode(65 + optIdx)}) {opt}</span>
                             {isCorrect && <span className="text-emerald-400 font-bold">✓ Correcta</span>}
                             {isStudent && !isCorrect && <span className="text-rose-400 font-bold">✗ Tu respuesta</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* True/False review */}
+                  {q.type === 'verdadero_falso' && (
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      {['Verdadero', 'Falso'].map((label, optIdx) => {
+                        const isStudent = (studentAnswer === optIdx) || (studentAnswer === (optIdx === 0));
+                        const isCorrect = (q.correctAnswer === optIdx) || (q.correctAnswer === (optIdx === 0)) || (optIdx === 0 && q.correctAnswer === 'Verdadero') || (optIdx === 1 && q.correctAnswer === 'Falso');
+                        return (
+                          <div
+                            key={optIdx}
+                            className={`p-2.5 rounded-xl border flex items-center justify-between ${
+                              isCorrect
+                                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200 font-semibold'
+                                : isStudent
+                                ? 'bg-rose-500/15 border-rose-500/40 text-rose-200'
+                                : 'bg-slate-900/40 border-slate-800 text-slate-400'
+                            }`}
+                          >
+                            <span className="font-bold">{label}</span>
+                            {isCorrect && <span className="text-emerald-400 font-bold">✓ Clave</span>}
+                            {isStudent && !isCorrect && <span className="text-rose-400 font-bold">✗ Marcaste</span>}
                           </div>
                         );
                       })}

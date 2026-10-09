@@ -74,6 +74,7 @@ const DB_EXAM_PATH = 'exams/quimica_general_2026/exam_data';
 const DB_SESSION_PATH = 'exams/quimica_general_2026/global_session';
 
 export interface ExamDataPayload {
+  examId?: string;
   title: string;
   questions: Question[];
   updatedAt: number;
@@ -89,6 +90,7 @@ class FirebaseDualService {
   private savedExams: SavedExam[] = [];
   
   private activeExamData: ExamDataPayload = {
+    examId: 'exam_quimica_default_2026',
     title: 'Examen de Química General',
     questions: CHEMISTRY_QUESTIONS,
     updatedAt: Date.now()
@@ -541,13 +543,21 @@ class FirebaseDualService {
     return this.activeExamData;
   }
 
-  public async saveActiveExam(title: string, questions: Question[]): Promise<void> {
+  public async saveActiveExam(title: string, questions: Question[], examId?: string): Promise<void> {
     const payload: ExamDataPayload = {
+      examId: examId || `exam_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       title: title.trim() || 'Examen de Química',
       questions,
       updatedAt: Date.now()
     };
     this.activeExamData = payload;
+
+    // Reset student active session on this device/tab so taking the new exam starts completely fresh
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('quimica_active_student_session_v2');
+      } catch {}
+    }
 
     try {
       localStorage.setItem(STORAGE_KEY_EXAM_DATA, JSON.stringify(payload));
@@ -704,17 +714,18 @@ class FirebaseDualService {
     this.notifySavedExamsListeners();
   }
 
-  public async activateSavedExam(id: string, clearStudents: boolean = false): Promise<SavedExam | null> {
+  public async activateSavedExam(id: string, clearStudents: boolean = true): Promise<SavedExam | null> {
     const target = this.savedExams.find((e) => e.id === id);
     if (!target) return null;
 
-    await this.saveActiveExam(target.title, target.questions);
+    await this.saveActiveExam(target.title, target.questions, target.id);
     if (target.durationMinutes) {
       this.globalSession.durationMinutes = target.durationMinutes;
       await this.setGlobalSession({
         ...this.globalSession,
         durationMinutes: target.durationMinutes,
-        title: target.title
+        title: target.title,
+        updatedAt: Date.now()
       });
     }
 
@@ -787,6 +798,25 @@ class FirebaseDualService {
   public async syncStudent(student: StudentExamState): Promise<void> {
     const cleanId = (student.id || student.matricula || 'ALUMNO').trim().toUpperCase().replace(/[/\\]/g, '_');
     student.id = cleanId;
+
+    // Preserve and lock immutable timestamps (startedAt, joinedWaitingAt, submittedAt)
+    const existing = this.localStudentsCache[student.id];
+    if (existing) {
+      if (existing.startedAt && (!student.startedAt || student.startedAt > existing.startedAt)) {
+        student.startedAt = existing.startedAt;
+      }
+      if (existing.joinedWaitingAt && !student.joinedWaitingAt) {
+        student.joinedWaitingAt = existing.joinedWaitingAt;
+      }
+      if (existing.submittedAt && !student.submittedAt && (existing.status === 'submitted' || existing.status === 'forced_submission_cheat')) {
+        student.submittedAt = existing.submittedAt;
+      }
+    } else {
+      if (!student.startedAt && (student.status === 'in_progress' || student.status === 'submitted' || student.status === 'forced_submission_cheat') && this.globalSession.startedAt) {
+        student.startedAt = this.globalSession.startedAt;
+      }
+    }
+
     this.localStudentsCache[student.id] = student;
     this.saveLocalCache();
 
@@ -1079,6 +1109,13 @@ class FirebaseDualService {
     const studentIds = Object.keys(this.localStudentsCache);
     this.localStudentsCache = {};
     this.saveLocalCache();
+
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('quimica_active_student_session_v2');
+        window.dispatchEvent(new CustomEvent('quimica:students_reset'));
+      } catch {}
+    }
 
     if (this.broadcastChannel) {
       try {

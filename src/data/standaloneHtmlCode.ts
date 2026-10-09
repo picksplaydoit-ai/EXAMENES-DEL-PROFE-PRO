@@ -959,6 +959,9 @@ export const STANDALONE_HTML_CODE = `<!DOCTYPE html>
       } else if (q.type === 'abierta') {
         typeBadge.innerText = 'Pregunta Abierta';
         typeBadge.className = 'px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-purple-500/20 text-purple-400 border border-purple-500/30';
+      } else if (q.type === 'verdadero_falso') {
+        typeBadge.innerText = 'Verdadero o Falso';
+        typeBadge.className = 'px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
       } else {
         typeBadge.innerText = 'Opción Múltiple';
         typeBadge.className = 'px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-indigo-500/20 text-indigo-400 border border-indigo-500/30';
@@ -990,6 +993,33 @@ export const STANDALONE_HTML_CODE = `<!DOCTYPE html>
           btn.innerHTML = \`
             <span class="w-7 h-7 rounded-xl flex items-center justify-center font-bold text-xs font-mono shrink-0 \${isSelected ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-indigo-300'}">\${String.fromCharCode(65+idx)}</span>
             <span>\${opt}</span>
+          \`;
+          btn.onclick = () => {
+            currentStudent.answers[q.id] = idx;
+            syncStudent(currentStudent);
+            renderQuestion();
+          };
+          grid.appendChild(btn);
+        });
+        area.appendChild(grid);
+      } else if (q.type === 'verdadero_falso') {
+        const grid = document.createElement('div');
+        grid.className = 'grid grid-cols-1 sm:grid-cols-2 gap-4';
+        ['Verdadero', 'Falso'].forEach((label, idx) => {
+          const isSelected = currentStudent.answers[q.id] === idx;
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = \`p-5 rounded-2xl border transition-all flex items-center justify-between space-x-3 text-left \${
+            isSelected
+              ? (idx === 0 ? 'bg-emerald-600/30 border-emerald-500 text-white font-bold ring-2 ring-emerald-500' : 'bg-rose-600/30 border-rose-500 text-white font-bold ring-2 ring-rose-500')
+              : 'bg-slate-900/70 border-slate-700 text-slate-300 hover:bg-slate-900'
+          }\`;
+          btn.innerHTML = \`
+            <div class="flex items-center space-x-3">
+              <span class="w-8 h-8 rounded-xl font-bold flex items-center justify-center text-xs \${idx === 0 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}">\${idx === 0 ? '✓' : '✗'}</span>
+              <span class="text-base font-bold">\${label}</span>
+            </div>
+            \${isSelected ? '<span class="text-emerald-400 font-bold">✓ Seleccionado</span>' : ''}
           \`;
           btn.onclick = () => {
             currentStudent.answers[q.id] = idx;
@@ -1101,6 +1131,10 @@ export const STANDALONE_HTML_CODE = `<!DOCTYPE html>
 
         if (q.type === 'opcion_multiple') {
           if (studentAns === q.correct) earned += q.points;
+        } else if (q.type === 'verdadero_falso') {
+          if (studentAns === q.correct || (studentAns === 0 && q.correct === 0) || (studentAns === 1 && q.correct === 1)) {
+            earned += q.points;
+          }
         } else if (q.type === 'abierta') {
           if (typeof studentAns === 'string' && studentAns.trim().length >= 10) {
             earned += q.points;
@@ -1275,11 +1309,12 @@ RETROALIMENTACION: La masa se conserva en cualquier reacción ordinaria.\`;
         const pairs = [];
 
         lines.forEach(l => {
-          const typeM = l.match(/^--\\s*TIPO\\s*:\\s*([A-Za-z_]+)\\s*--?$/i);
+          const typeM = l.match(/^(?:--\s*)?(?:TIPO|TYPE)\s*:\s*([A-Za-z_]+)(?:\s*--)?$/i);
           if (typeM) {
             const t = typeM[1].toLowerCase();
-            if (t.includes('abierta')) qType = 'abierta';
-            else if (t.includes('relacion')) qType = 'relacionar';
+            if (t.includes('abierta') || t.includes('open')) qType = 'abierta';
+            else if (t.includes('relacion') || t.includes('match')) qType = 'relacionar';
+            else if (t.includes('verdadero') || t.includes('falso') || t.includes('vf') || t.includes('true')) qType = 'verdadero_falso';
             else qType = 'opcion_multiple';
           }
           const imgM = l.match(/^(?:IMAGEN|IMAGE|IMG)\\s*:\\s*(https?:\\/\\/[^\\s]+)$/i);
@@ -1310,6 +1345,18 @@ RETROALIMENTACION: La masa se conserva en cualquier reacción ordinaria.\`;
               imageUrl: imgUrl || undefined,
               pairs: pairs,
               explanation: explanation || 'Relaciona cada elemento con su par.',
+              points: Math.round(100 / rawBlocks.length)
+            });
+          } else if (qType === 'verdadero_falso') {
+            const isTrue = /^(?:VERDADERO|V|TRUE|0)$/i.test(correctLetter) || /VERDADERO/i.test(qText);
+            parsed.push({
+              id: 'q_' + idx,
+              type: 'verdadero_falso',
+              question: qText,
+              imageUrl: imgUrl || undefined,
+              options: ['Verdadero', 'Falso'],
+              correct: isTrue ? 0 : 1,
+              explanation: explanation || (isTrue ? 'La afirmación es Verdadera.' : 'La afirmación es Falsa.'),
               points: Math.round(100 / rawBlocks.length)
             });
           } else if (qType === 'abierta') {
@@ -1402,21 +1449,35 @@ RETROALIMENTACION: La masa se conserva en cualquier reacción ordinaria.\`;
       }
 
       // 1. Resumen de calificaciones
-      const summaryData = list.map((s, idx) => ({
-        '#': idx + 1,
-        'Matrícula': s.matricula,
-        'Nombre Completo': s.fullName,
-        'Estado': s.status === 'forced_submission_cheat' ? 'Expulsado por Faltas' : s.status === 'submitted' ? 'Completado' : s.status === 'waiting' ? 'En Sala' : 'En Curso',
-        'Calificación': s.score || 0,
-        'Puntaje Máximo': totalPoints,
-        'Porcentaje': \`\${s.percentage || 0}%\`,
-        'Resultado': (s.percentage || 0) >= 60 ? 'APROBADO' : 'REPROBADO',
-        'Faltas Anti-Trampas': s.warnings || 0
-      }));
+      const summaryData = list.map((s, idx) => {
+        const start = s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : '-';
+        const end = s.submittedAt ? new Date(s.submittedAt).toLocaleTimeString() : '-';
+        let durationStr = '-';
+        if (s.startedAt && s.submittedAt && s.submittedAt >= s.startedAt) {
+          const diffSec = Math.floor((s.submittedAt - s.startedAt) / 1000);
+          const min = Math.floor(diffSec / 60);
+          const sec = diffSec % 60;
+          durationStr = min === 0 ? \`\${sec} seg\` : \`\${min} min \${sec} s\`;
+        }
+        return {
+          '#': idx + 1,
+          'Matrícula': s.matricula,
+          'Nombre Completo': s.fullName,
+          'Estado': s.status === 'forced_submission_cheat' ? 'Expulsado por Faltas' : s.status === 'submitted' ? 'Completado' : s.status === 'waiting' ? 'En Sala' : 'En Curso',
+          'Calificación': s.score || 0,
+          'Puntaje Máximo': totalPoints,
+          'Porcentaje': \`\${s.percentage || 0}%\`,
+          'Resultado': (s.percentage || 0) >= 60 ? 'APROBADO' : 'REPROBADO',
+          'Faltas Anti-Trampas': s.warnings || 0,
+          'Hora de Inicio': start,
+          'Hora de Fin': end,
+          'Tiempo Empleado': durationStr
+        };
+      });
 
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.json_to_sheet(summaryData);
-      ws['!cols'] = [{ wch: 5 }, { wch: 18 }, { wch: 30 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 20 }];
+      ws['!cols'] = [{ wch: 5 }, { wch: 18 }, { wch: 30 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 18 }];
       XLSX.utils.book_append_sheet(wb, ws, 'Calificaciones');
 
       const cleanTitle = examTitle.replace(/[\\\\/*?[\\]:]/g, '_').replace(/\\s+/g, '_');

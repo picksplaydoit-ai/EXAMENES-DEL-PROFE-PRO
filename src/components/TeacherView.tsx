@@ -36,13 +36,15 @@ import {
   BookOpen,
   LayoutGrid,
   XCircle,
-  Minus
+  Minus,
+  BarChart3
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { StudentExamState, Question, GlobalSessionState, SavedExam } from '../types';
+import { StudentExamState, Question, GlobalSessionState, SavedExam, CheatLog } from '../types';
 import { firebaseService, ExamDataPayload } from '../services/firebaseService';
 import { ExamLoaderModal } from './ExamLoaderModal';
 import { QRCodeModal } from './QRCodeModal';
+import { ExamStatisticsView } from './ExamStatisticsView';
 
 interface TeacherViewProps {
   onOpenFirebaseConfig: () => void;
@@ -56,6 +58,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [students, setStudents] = useState<Record<string, StudentExamState>>({});
   const [selectedStudentForModal, setSelectedStudentForModal] = useState<StudentExamState | null>(null);
   const [viewMode, setViewMode] = useState<'matrix' | 'table'>('matrix');
+  const [teacherViewMode, setTeacherViewMode] = useState<'proctor' | 'statistics'>('proctor');
   const [inspectedQuestionDetail, setInspectedQuestionDetail] = useState<{
     studentName: string;
     matricula: string;
@@ -195,7 +198,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       return {
         status: 'unanswered',
         studentAnswerText: 'Sin responder aún',
-        correctAnswerText: q.type === 'opcion_multiple' && q.options && q.correctAnswer !== undefined
+        correctAnswerText: q.type === 'opcion_multiple' && q.options && typeof q.correctAnswer === 'number' && q.options[q.correctAnswer]
           ? `${String.fromCharCode(65 + q.correctAnswer)}) ${q.options[q.correctAnswer]}`
           : 'Clave oficial'
       };
@@ -206,7 +209,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       const ansText = typeof studentAns === 'number' && q.options[studentAns]
         ? `${String.fromCharCode(65 + studentAns)}) ${q.options[studentAns]}`
         : String(studentAns);
-      const correctText = q.correctAnswer !== undefined && q.options[q.correctAnswer]
+      const correctText = typeof q.correctAnswer === 'number' && q.options[q.correctAnswer]
         ? `${String.fromCharCode(65 + q.correctAnswer)}) ${q.options[q.correctAnswer]}`
         : '-';
 
@@ -214,6 +217,21 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         status: isCorrect ? 'correct' : 'incorrect',
         studentAnswerText: ansText,
         correctAnswerText: correctText
+      };
+    }
+
+    if (q.type === 'verdadero_falso') {
+      const isCorrect = (studentAns === q.correctAnswer) ||
+        (studentAns === 0 && (q.correctAnswer === 0 || q.correctAnswer === true || q.correctAnswer === 'Verdadero')) ||
+        (studentAns === 1 && (q.correctAnswer === 1 || q.correctAnswer === false || q.correctAnswer === 'Falso')) ||
+        (studentAns === true && (q.correctAnswer === 0 || q.correctAnswer === true)) ||
+        (studentAns === false && (q.correctAnswer === 1 || q.correctAnswer === false));
+      const studentLabel = (studentAns === 0 || studentAns === true || studentAns === 'Verdadero') ? 'Verdadero' : (studentAns === 1 || studentAns === false || studentAns === 'Falso') ? 'Falso' : String(studentAns);
+      const correctLabel = (q.correctAnswer === 0 || q.correctAnswer === true || q.correctAnswer === 'Verdadero') ? 'Verdadero' : 'Falso';
+      return {
+        status: isCorrect ? 'correct' : 'incorrect',
+        studentAnswerText: studentLabel,
+        correctAnswerText: correctLabel
       };
     }
 
@@ -253,9 +271,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   };
 
   const handleQuickSwitchExam = async (examId: string) => {
-    const activated = await firebaseService.activateSavedExam(examId, false);
+    const activated = await firebaseService.activateSavedExam(examId, true);
     if (activated) {
-      showNotification(`✓ Examen activo cambiado a: "${activated.title}"`);
+      setExamData({
+        examId: activated.id,
+        title: activated.title,
+        questions: activated.questions,
+        updatedAt: Date.now()
+      });
+      showNotification(`✓ Examen activo cambiado a: "${activated.title}" (${activated.questions.length} reactivos)`);
     }
   };
 
@@ -283,19 +307,52 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     showNotification('⏸️ Sala de Espera reactivada.');
   };
 
-  // Export to Excel (.xlsx) con 3 hojas: Calificaciones, Detalle de Respuestas y Auditoría Anti-Trampas
-  const handleExportExcel = () => {
-    if (studentList.length === 0) {
+  // Format helpers for Excel and UI
+  const formatTime = (ts?: number): string => {
+    if (!ts) return '-';
+    const d = new Date(ts);
+    return d.toLocaleTimeString('es-MX', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    });
+  };
+
+  const formatDuration = (startMs?: number, endMs?: number): string => {
+    if (!startMs || !endMs) return '-';
+    const diffMs = endMs - startMs;
+    if (diffMs < 0) return '0 min';
+    const totalSec = Math.floor(diffMs / 1000);
+    const min = Math.floor(totalSec / 60);
+    const sec = totalSec % 60;
+    if (min === 0) return `${sec} seg`;
+    if (sec === 0) return `${min} min`;
+    return `${min} min ${sec} s`;
+  };
+
+  // Export to Excel (.xlsx) con 4 hojas: Resumen Calificaciones, Detalle de Respuestas, Auditoría Anti-Trampas y Datos del Examen
+  const handleExportExcel = (studentsOverride?: StudentExamState[] | unknown) => {
+    const listToExport = (Array.isArray(studentsOverride) && studentsOverride.length > 0)
+      ? studentsOverride
+      : (studentList.length > 0 ? studentList : Object.values(students));
+
+    if (listToExport.length === 0) {
       showNotification('No hay alumnos registrados para exportar.');
       return;
     }
 
     // 1. Hoja Resumen de Calificaciones
-    const summaryData = studentList.map((st, index) => {
+    const summaryData = listToExport.map((st, index) => {
       const isApproved = (st.percentage || 0) >= 60;
-      const durationMin = st.startedAt && st.submittedAt
-        ? Math.max(1, Math.round((st.submittedAt - st.startedAt) / 60000))
-        : '-';
+      
+      // Determine exact start and finish times
+      const effectiveStart = st.startedAt || (st.status !== 'waiting' ? globalSession.startedAt : undefined);
+      const effectiveEnd = st.submittedAt || ((st.status === 'submitted' || st.status === 'forced_submission_cheat') 
+        ? (st.lastActive || globalSession.endsAt || Date.now()) 
+        : undefined);
+      
+      const durationText = formatDuration(effectiveStart, effectiveEnd);
 
       return {
         '#': index + 1,
@@ -313,14 +370,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         'Porcentaje': `${st.percentage}%`,
         'Dictamen': isApproved ? 'APROBADO' : 'REPROBADO',
         'Faltas Anti-Trampas': st.cheatWarningsCount || 0,
-        'Hora Inicio': st.startedAt ? new Date(st.startedAt).toLocaleTimeString() : '-',
-        'Hora Envío': st.submittedAt ? new Date(st.submittedAt).toLocaleTimeString() : '-',
-        'Tiempo Empleado (min)': durationMin
+        'Hora de Inicio': formatTime(effectiveStart),
+        'Hora de Fin': formatTime(effectiveEnd),
+        'Tiempo Empleado': durationText
       };
     });
 
     // 2. Hoja Detalle de Respuestas por Pregunta
-    const detailData = studentList.map((st) => {
+    const detailData = listToExport.map((st) => {
       const row: Record<string, any> = {
         'Matrícula': st.matricula,
         'Alumno': st.fullName,
@@ -335,9 +392,22 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             const isCorrect = ans === q.correctAnswer;
             displayAns = `${String.fromCharCode(65 + ans)}) ${q.options[ans]} [${isCorrect ? 'CORRECTO' : 'INCORRECTO'}]`;
           }
+        } else if (q.type === 'verdadero_falso') {
+          const isCorrect = (ans === q.correctAnswer) ||
+            (ans === 0 && (q.correctAnswer === 0 || q.correctAnswer === true || q.correctAnswer === 'Verdadero')) ||
+            (ans === 1 && (q.correctAnswer === 1 || q.correctAnswer === false || q.correctAnswer === 'Falso')) ||
+            (ans === true && (q.correctAnswer === 0 || q.correctAnswer === true)) ||
+            (ans === false && (q.correctAnswer === 1 || q.correctAnswer === false));
+          const label = (ans === 0 || ans === true || ans === 'Verdadero') ? 'Verdadero' : (ans === 1 || ans === false || ans === 'Falso') ? 'Falso' : String(ans);
+          displayAns = `${label} [${isCorrect ? 'CORRECTO' : 'INCORRECTO'}]`;
         } else if (q.type === 'relacionar') {
           if (ans && typeof ans === 'object') {
-            displayAns = Object.entries(ans).map(([left, right]) => `${left} ➔ ${right}`).join('; ');
+            displayAns = Object.entries(ans).map(([leftId, rightVal]) => {
+              const pair = q.pairs?.find((p) => p.id === leftId);
+              const leftText = pair ? pair.left : leftId;
+              const isMatch = pair ? pair.right === rightVal : false;
+              return `${leftText} ➔ ${rightVal} [${isMatch ? 'CORRECTO' : 'INCORRECTO'}]`;
+            }).join('; ');
           }
         } else if (q.type === 'abierta') {
           displayAns = typeof ans === 'string' ? ans : 'Sin respuesta';
@@ -350,37 +420,56 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
     // 3. Hoja Bitácora Anti-Trampas
     const cheatData: any[] = [];
-    studentList.forEach((st) => {
+    listToExport.forEach((st) => {
       if (st.cheatLogs && st.cheatLogs.length > 0) {
-        st.cheatLogs.forEach((log) => {
+        st.cheatLogs.forEach((log: CheatLog) => {
           cheatData.push({
             'Matrícula': st.matricula,
             'Alumno': st.fullName,
             'Infracción #': log.warningNumber,
             'Motivo de Falta': log.reason,
-            'Hora Registrada': new Date(log.timestamp).toLocaleTimeString()
+            'Hora Registrada': formatTime(log.timestamp)
           });
         });
       }
     });
+
+    // 4. Hoja Datos Generales del Examen
+    const approvedCount = listToExport.filter(s => (s.percentage || 0) >= 60).length;
+    const avgScore = listToExport.length > 0 
+      ? Math.round(listToExport.reduce((acc, s) => acc + (s.score || 0), 0) / listToExport.length) 
+      : 0;
+
+    const examGeneralInfo = [
+      { 'Parámetro': 'Título del Examen', 'Valor': examData.title },
+      { 'Parámetro': 'Fecha de Aplicación', 'Valor': new Date().toLocaleDateString('es-MX', { year: 'numeric', month: 'long', day: 'numeric' }) },
+      { 'Parámetro': 'Hora Oficial Inicio Examen', 'Valor': globalSession.startedAt ? formatTime(globalSession.startedAt) : 'No iniciada' },
+      { 'Parámetro': 'Hora Oficial Fin / Cierre', 'Valor': globalSession.endsAt ? formatTime(globalSession.endsAt) : 'Sin límite' },
+      { 'Parámetro': 'Duración Configurada (minutos)', 'Valor': globalSession.durationMinutes || customDurationMinutes || 20 },
+      { 'Parámetro': 'Total de Alumnos Registrados', 'Valor': listToExport.length },
+      { 'Parámetro': 'Alumnos Aprobados (>=60%)', 'Valor': approvedCount },
+      { 'Parámetro': 'Alumnos Reprobados (<60%)', 'Valor': listToExport.length - approvedCount },
+      { 'Parámetro': 'Promedio General del Grupo', 'Valor': `${avgScore} / ${totalExamPoints} pts` },
+      { 'Parámetro': 'Tasa de Aprobación', 'Valor': `${listToExport.length > 0 ? Math.round((approvedCount / listToExport.length) * 100) : 0}%` }
+    ];
 
     // Crear Workbook
     const wb = XLSX.utils.book_new();
 
     const wsSummary = XLSX.utils.json_to_sheet(summaryData);
     wsSummary['!cols'] = [
-      { wch: 5 },
-      { wch: 18 },
-      { wch: 32 },
-      { wch: 22 },
-      { wch: 16 },
-      { wch: 16 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 20 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 22 }
+      { wch: 5 },   // #
+      { wch: 18 },  // Matrícula
+      { wch: 32 },  // Nombre
+      { wch: 22 },  // Estado
+      { wch: 16 },  // Puntaje Obtenido
+      { wch: 16 },  // Puntaje Máximo
+      { wch: 14 },  // Porcentaje
+      { wch: 14 },  // Dictamen
+      { wch: 20 },  // Faltas Anti-Trampas
+      { wch: 18 },  // Hora de Inicio
+      { wch: 18 },  // Hora de Fin
+      { wch: 20 }   // Tiempo Empleado
     ];
     XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumen Calificaciones');
 
@@ -401,6 +490,58 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       XLSX.utils.book_append_sheet(wb, wsCheat, 'Auditoría Anti-Trampas');
     }
 
+    // 4. Hoja Estadísticas y Psicometría de Reactivos
+    const questionsStatData = activeQuestions.map((q, qIdx) => {
+      let correct = 0;
+      let incorrect = 0;
+      listToExport.forEach((st) => {
+        const studentAns = st.answers ? st.answers[q.id] : undefined;
+        if (studentAns !== undefined && studentAns !== null && studentAns !== '') {
+          const evalRes = evaluateStudentQuestion(q, studentAns);
+          if (evalRes.status === 'correct') correct++;
+          else if (evalRes.status === 'incorrect') incorrect++;
+        }
+      });
+      const totalAnswers = correct + incorrect;
+      const successRate = totalAnswers > 0 ? Math.round((correct / totalAnswers) * 100) : 0;
+      const errorRate = 100 - successRate;
+      const diffLevel = totalAnswers === 0 ? 'Sin respuestas' : successRate < 45 ? 'Alta (Difícil)' : successRate > 75 ? 'Baja (Fácil)' : 'Media';
+
+      return {
+        '#': qIdx + 1,
+        'Pregunta': q.question,
+        'Tipo': q.type === 'opcion_multiple' ? 'Opción Múltiple' : q.type === 'verdadero_falso' ? 'Verdadero o Falso' : q.type === 'relacionar' ? 'Relacionar' : 'Abierta',
+        'Tema': q.topic || 'General',
+        'Puntos': q.points,
+        'Aciertos': correct,
+        'Errores': incorrect,
+        'Total Respuestas': totalAnswers,
+        '% Tasa Acierto': `${successRate}%`,
+        '% Tasa Error': `${errorRate}%`,
+        'Nivel Dificultad': diffLevel
+      };
+    });
+
+    const wsStats = XLSX.utils.json_to_sheet(questionsStatData);
+    wsStats['!cols'] = [
+      { wch: 5 },
+      { wch: 45 },
+      { wch: 18 },
+      { wch: 20 },
+      { wch: 8 },
+      { wch: 10 },
+      { wch: 10 },
+      { wch: 16 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 16 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsStats, 'Estadísticas de Reactivos');
+
+    const wsInfo = XLSX.utils.json_to_sheet(examGeneralInfo);
+    wsInfo['!cols'] = [{ wch: 35 }, { wch: 45 }];
+    XLSX.utils.book_append_sheet(wb, wsInfo, 'Datos del Examen');
+
     const cleanTitle = examData.title.replace(/[\\/*?[\]:]/g, '_').replace(/\s+/g, '_');
     const dateStr = new Date().toISOString().slice(0, 10);
     const fileName = `Reporte_Examen_${cleanTitle}_${dateStr}.xlsx`;
@@ -412,17 +553,25 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   // Finalizar Examen para Todos y abrir descarga de Excel
   const handleFinishExam = async () => {
     const now = Date.now();
+    const currentStudents = { ...students };
     const updatePromises: Promise<void>[] = [];
-    Object.values(students).forEach((st) => {
+    const updatedStudentList: StudentExamState[] = [];
+
+    Object.values(currentStudents).forEach((st) => {
       if (st.status === 'in_progress' || st.status === 'waiting') {
         const updated: StudentExamState = {
           ...st,
           status: 'submitted',
-          submittedAt: now
+          startedAt: st.startedAt || globalSession.startedAt || now,
+          submittedAt: st.submittedAt || now
         };
+        updatedStudentList.push(updated);
         updatePromises.push(firebaseService.syncStudent(updated));
+      } else {
+        updatedStudentList.push(st);
       }
     });
+
     await Promise.all(updatePromises);
     await firebaseService.setGlobalSession({
       ...globalSession,
@@ -430,28 +579,38 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       updatedAt: now
     });
     showNotification('🏁 Examen finalizado para todos. Generando Excel...');
-    handleExportExcel();
+    handleExportExcel(updatedStudentList);
   };
 
   // Export to CSV
   const handleExportCSV = () => {
-    if (studentList.length === 0) {
+    const listToExport = studentList.length > 0 ? studentList : Object.values(students);
+    if (listToExport.length === 0) {
       showNotification('No hay alumnos registrados para exportar.');
       return;
     }
 
-    const headers = ['Matricula', 'Nombre Completo', 'Estado', 'Puntaje Obtenido', 'Puntaje Maximo', 'Porcentaje', 'Faltas Anti-Trampas', 'Hora Inicio', 'Hora Envio'];
-    const rows = studentList.map((st) => [
-      `"${st.matricula}"`,
-      `"${st.fullName}"`,
-      `"${st.status === 'forced_submission_cheat' ? 'Expulsado por Faltas' : st.status === 'submitted' ? 'Completado' : st.status === 'waiting' ? 'En Sala de Espera' : 'En Curso'}"`,
-      st.score,
-      st.maxScore || totalExamPoints,
-      `${st.percentage}%`,
-      st.cheatWarningsCount,
-      st.startedAt ? `"${new Date(st.startedAt).toLocaleTimeString()}"` : '""',
-      st.submittedAt ? `"${new Date(st.submittedAt).toLocaleTimeString()}"` : '""'
-    ]);
+    const headers = ['Matricula', 'Nombre Completo', 'Estado', 'Puntaje Obtenido', 'Puntaje Maximo', 'Porcentaje', 'Faltas Anti-Trampas', 'Hora Inicio', 'Hora Fin', 'Tiempo Empleado'];
+    const rows = listToExport.map((st) => {
+      const effectiveStart = st.startedAt || (st.status !== 'waiting' ? globalSession.startedAt : undefined);
+      const effectiveEnd = st.submittedAt || ((st.status === 'submitted' || st.status === 'forced_submission_cheat') 
+        ? (st.lastActive || globalSession.endsAt || Date.now()) 
+        : undefined);
+      const durationText = formatDuration(effectiveStart, effectiveEnd);
+
+      return [
+        `"${st.matricula}"`,
+        `"${st.fullName}"`,
+        `"${st.status === 'forced_submission_cheat' ? 'Expulsado por Faltas' : st.status === 'submitted' ? 'Completado' : st.status === 'waiting' ? 'En Sala de Espera' : 'En Curso'}"`,
+        st.score,
+        st.maxScore || totalExamPoints,
+        `${st.percentage}%`,
+        st.cheatWarningsCount,
+        effectiveStart ? `"${formatTime(effectiveStart)}"` : '""',
+        effectiveEnd ? `"${formatTime(effectiveEnd)}"` : '""',
+        `"${durationText}"`
+      ];
+    });
 
     const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
     const encodedUri = encodeURI(csvContent);
@@ -672,7 +831,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               <div className="flex flex-col sm:flex-row items-center gap-3">
                 <button
                   type="button"
-                  onClick={handleExportExcel}
+                  onClick={() => handleExportExcel()}
                   className="px-6 py-3.5 rounded-2xl font-black text-sm text-white bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-400 shadow-xl shadow-emerald-600/35 transition-all flex items-center space-x-2 border border-emerald-400/40"
                 >
                   <FileSpreadsheet className="w-5 h-5 text-white" />
@@ -751,7 +910,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   🛡️ Anti-Copia: Orden y Opciones Barajados
                 </span>
                 <span className="text-xs text-slate-400 font-mono">
-                  • {activeQuestions.length} reactivos ({totalExamPoints} pts) • Opción Múltiple
+                  • {activeQuestions.length} reactivos ({totalExamPoints} pts) • {
+                    Array.from(new Set(activeQuestions.map(q => q.type))).map(t => 
+                      t === 'opcion_multiple' ? 'Opción Múltiple' : 
+                      t === 'verdadero_falso' ? 'V/F' : 
+                      t === 'relacionar' ? 'Relacionar' : 'Abiertas'
+                    ).join(', ') || 'Multi-Reactivo'
+                  }
                 </span>
               </div>
               <h2 className="text-xl sm:text-2xl font-black text-white mt-1">
@@ -818,10 +983,72 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
               <span>Nuevo Grupo</span>
             </button>
+
+            {/* Direct Button for Estadísticas */}
+            <button
+              type="button"
+              onClick={() => setTeacherViewMode(teacherViewMode === 'statistics' ? 'proctor' : 'statistics')}
+              className={`px-3 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center space-x-1.5 ${
+                teacherViewMode === 'statistics'
+                  ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-md shadow-purple-600/30'
+                  : 'text-purple-300 bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/30'
+              }`}
+            >
+              <BarChart3 className="w-4 h-4 text-purple-400" />
+              <span>{teacherViewMode === 'statistics' ? 'Ver Monitor' : 'Estadísticas'}</span>
+            </button>
           </div>
         </div>
       </div>
 
+      {/* Primary Navigation Tabs: Monitor en Vivo vs Estadísticas de Reactivos */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-950/70 p-2 rounded-2xl border border-slate-800">
+        <div className="flex items-center space-x-2">
+          <button
+            type="button"
+            onClick={() => setTeacherViewMode('proctor')}
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center space-x-2 ${
+              teacherViewMode === 'proctor'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <Users className="w-4 h-4" />
+            <span>Monitor en Vivo ({studentList.length} alumnos)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setTeacherViewMode('statistics')}
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center space-x-2 ${
+              teacherViewMode === 'statistics'
+                ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-md shadow-purple-600/30'
+                : 'text-purple-300 hover:text-white hover:bg-purple-500/10'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4 text-purple-400" />
+            <span>📊 Estadísticas y Dificultad de Reactivos ({activeQuestions.length} preguntas)</span>
+          </button>
+        </div>
+
+        {teacherViewMode === 'statistics' && (
+          <span className="text-[11px] font-semibold text-purple-300 px-3 py-1 rounded-full bg-purple-500/15 border border-purple-500/25 hidden md:inline">
+            ✨ Psicometría y Reactivos Más Difíciles / Fáciles
+          </span>
+        )}
+      </div>
+
+      {/* Conditionally render Statistics View or Live Proctoring Board */}
+      {teacherViewMode === 'statistics' ? (
+        <ExamStatisticsView
+          examTitle={examData.title}
+          questions={activeQuestions}
+          students={studentList}
+          onExportExcel={handleExportExcel}
+          onBackToProctor={() => setTeacherViewMode('proctor')}
+        />
+      ) : (
+        <>
       {/* Main Header & Real-time Indicator */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -854,7 +1081,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
           <button
             type="button"
-            onClick={handleExportExcel}
+            onClick={() => handleExportExcel()}
             className="flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-md shadow-emerald-600/30 border border-emerald-500/40 transition-all"
             title="Descargar libro Excel completo (.xlsx) con notas y reactivos"
           >
@@ -1555,6 +1782,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           </div>
         )}
       </div>
+        </>
+      )}
 
       {/* ========================================================
           STUDENT AUDIT & DETAILS MODAL
@@ -1604,6 +1833,31 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   }`}>
                     {selectedStudentForModal.cheatWarningsCount} / 3
                   </div>
+                </div>
+              </div>
+
+              {/* Timing Bar: Hora de Inicio, Hora de Fin, Tiempo Empleado */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/80">
+                  <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Hora de Inicio</span>
+                  <span className="text-xs font-mono font-bold text-indigo-300 mt-0.5 block">
+                    {formatTime(selectedStudentForModal.startedAt || (selectedStudentForModal.status !== 'waiting' ? globalSession.startedAt : undefined))}
+                  </span>
+                </div>
+                <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/80">
+                  <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Hora de Fin / Envío</span>
+                  <span className="text-xs font-mono font-bold text-teal-300 mt-0.5 block">
+                    {formatTime(selectedStudentForModal.submittedAt || ((selectedStudentForModal.status === 'submitted' || selectedStudentForModal.status === 'forced_submission_cheat') ? (selectedStudentForModal.lastActive || globalSession.endsAt) : undefined))}
+                  </span>
+                </div>
+                <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/80">
+                  <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Tiempo Empleado</span>
+                  <span className="text-xs font-mono font-bold text-amber-300 mt-0.5 block">
+                    {formatDuration(
+                      selectedStudentForModal.startedAt || (selectedStudentForModal.status !== 'waiting' ? globalSession.startedAt : undefined),
+                      selectedStudentForModal.submittedAt || ((selectedStudentForModal.status === 'submitted' || selectedStudentForModal.status === 'forced_submission_cheat') ? (selectedStudentForModal.lastActive || globalSession.endsAt) : undefined)
+                    )}
+                  </span>
                 </div>
               </div>
 
@@ -1727,6 +1981,54 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                       );
                     }
 
+                    if (q.type === 'verdadero_falso') {
+                      const isCorrect = (studentAns === q.correctAnswer) ||
+                        (studentAns === 0 && (q.correctAnswer === 0 || q.correctAnswer === true || q.correctAnswer === 'Verdadero')) ||
+                        (studentAns === 1 && (q.correctAnswer === 1 || q.correctAnswer === false || q.correctAnswer === 'Falso')) ||
+                        (studentAns === true && (q.correctAnswer === 0 || q.correctAnswer === true)) ||
+                        (studentAns === false && (q.correctAnswer === 1 || q.correctAnswer === false));
+                      const studentLabel = (studentAns === 0 || studentAns === true || studentAns === 'Verdadero') ? 'Verdadero' : (studentAns === 1 || studentAns === false || studentAns === 'Falso') ? 'Falso' : String(studentAns);
+                      const correctLabel = (q.correctAnswer === 0 || q.correctAnswer === true || q.correctAnswer === 'Verdadero') ? 'Verdadero' : 'Falso';
+
+                      return (
+                        <div key={q.id} className="p-3.5 rounded-xl bg-slate-800/70 border border-slate-700 text-xs space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-white">
+                              {idx + 1}. [V/F] {q.question}
+                            </span>
+                            {hasAnswered ? (
+                              isCorrect ? (
+                                <span className="text-emerald-400 font-bold shrink-0 ml-2">Correcta (+{q.points}pts)</span>
+                              ) : (
+                                <span className="text-rose-400 font-bold shrink-0 ml-2">Incorrecta (0pts)</span>
+                              )
+                            ) : (
+                              <span className="text-slate-500 italic shrink-0 ml-2">Sin responder</span>
+                            )}
+                          </div>
+
+                          {hasAnswered && (
+                            <div className="text-[11px] text-slate-300 space-y-1 pt-1 border-t border-slate-700/60 font-mono">
+                              <p>
+                                • Marcó: <span className={isCorrect ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>{studentLabel}</span>
+                              </p>
+                              {!isCorrect && (
+                                <p className="text-emerald-400 font-bold">
+                                  • Respuesta correcta: {correctLabel}
+                                </p>
+                              )}
+                            </div>
+                          )}
+
+                          {q.explanation && (
+                            <p className="text-[11px] text-slate-400 italic pt-1 border-t border-slate-700/60">
+                              💡 Justificación: {q.explanation}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    }
+
                     // opcion_multiple
                     const options = q.options || [];
                     const pickedIdx = studentAns as number | undefined;
@@ -1756,7 +2058,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             </p>
                             {!isCorrect && (
                               <p className="text-emerald-400">
-                                • Correcta era: {q.correctAnswer !== undefined && options[q.correctAnswer] ? options[q.correctAnswer] : 'N/A'}
+                                • Correcta era: {typeof q.correctAnswer === 'number' && options[q.correctAnswer] ? options[q.correctAnswer] : 'N/A'}
                               </p>
                             )}
                           </div>

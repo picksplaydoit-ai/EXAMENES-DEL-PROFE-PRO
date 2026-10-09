@@ -85,7 +85,7 @@ export const StudentWaitingRoom: React.FC<StudentWaitingRoomProps> = ({
         </p>
 
         <div className="mt-3 inline-flex items-center space-x-2 px-3.5 py-1 rounded-full bg-indigo-500/20 border border-indigo-500/30 text-xs text-indigo-200">
-          <span>Examen: <strong className="text-white">{student.examTitle || session.title || 'Evaluación'}</strong></span>
+          <span>Examen: <strong className="text-white">{session.title || student.examTitle || 'Evaluación'}</strong></span>
           <span>•</span>
           <span className="text-amber-300 font-semibold">🛡️ Orden anti-copia activo</span>
         </div>

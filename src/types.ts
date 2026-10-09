@@ -1,4 +1,4 @@
-export type QuestionType = 'opcion_multiple' | 'abierta' | 'relacionar';
+export type QuestionType = 'opcion_multiple' | 'verdadero_falso' | 'abierta' | 'relacionar';
 
 export interface ColumnPair {
   id: string;
@@ -13,8 +13,8 @@ export interface Question {
   question: string;
   imageUrl?: string;
   formula?: string;
-  options?: string[]; // for opcion_multiple
-  correctAnswer?: number; // for opcion_multiple
+  options?: string[]; // for opcion_multiple and verdadero_falso
+  correctAnswer?: number | boolean | string; // for opcion_multiple and verdadero_falso (0/true/'Verdadero', 1/false/'Falso')
   referenceAnswer?: string; // for abierta
   pairs?: ColumnPair[]; // for relacionar
   explanation: string;
@@ -77,4 +77,19 @@ export interface FirebaseConfig {
   messagingSenderId?: string;
   appId?: string;
   firestoreDatabaseId?: string;
+}
+
+export interface QuestionStatItem {
+  questionNumber: number;
+  question: Question;
+  attemptsCount: number;
+  correctCount: number;
+  incorrectCount: number;
+  unansweredCount: number;
+  successRate: number; // 0 to 100 (%)
+  errorRate: number; // 0 to 100 (%)
+  difficultyLevel: 'alta' | 'media' | 'baja'; // 'alta' = high difficulty / hard, 'media' = moderate, 'baja' = low difficulty / easy
+  optionDistribution?: Record<string, number>; // counts per option key (e.g. A: 4, B: 10, C: 2)
+  mostCommonWrongAnswer?: string;
+  evaluatedStudentCount: number;
 }

@@ -73,6 +73,67 @@ export const CHEMISTRY_QUESTIONS: Question[] = [
 
 export const PREDEFINED_SAVED_EXAMS: SavedExam[] = [
   {
+    id: 'exam_quimica_multi_reactivo',
+    title: 'Examen Multi-Reactivo: Enlaces, V/F, Relacionar y Desarrollo',
+    description: 'Evaluación integral combinada: Opción Múltiple, Verdadero/Falso, Relacionar Columnas y Pregunta Abierta.',
+    questions: [
+      {
+        id: 'multi_1',
+        type: 'opcion_multiple',
+        topic: 'Enlaces Químicos',
+        question: '¿Qué tipo de enlace químico se forma entre un metal y un no metal debido a una gran diferencia de electronegatividad?',
+        imageUrl: 'https://images.unsplash.com/photo-1532187863486-abf9dbad1b69?w=800&auto=format&fit=crop&q=80',
+        formula: 'Na⁺ + Cl⁻ → NaCl',
+        options: [
+          'Enlace Covalente Polar',
+          'Enlace Iónico (Electrovalente)',
+          'Enlace Metálico',
+          'Enlace Covalente No Polar'
+        ],
+        correctAnswer: 1,
+        explanation: 'El enlace iónico resulta de la transferencia completa de electrones del metal al no metal, formándose iones unidos electrostáticamente.',
+        points: 25
+      },
+      {
+        id: 'multi_2',
+        type: 'verdadero_falso',
+        topic: 'Geometría Molecular',
+        question: 'El agua (H₂O) es una molécula polar debido a la diferencia de electronegatividad entre el oxígeno y el hidrógeno, y a su geometría molecular angular.',
+        formula: 'μ_neto ≠ 0 D (θ ≈ 104.5°)',
+        options: ['Verdadero', 'Falso'],
+        correctAnswer: 0,
+        explanation: 'Verdadero: La geometría angular evita que los momentos dipolares de los enlaces O-H se cancelen, generando un momento dipolar neto permanente.',
+        points: 25
+      },
+      {
+        id: 'multi_3',
+        type: 'relacionar',
+        topic: 'Nomenclatura y Funciones Inorgánicas',
+        question: 'Relaciona cada fórmula química con su función inorgánica correspondiente:',
+        pairs: [
+          { id: 'p1', left: 'HCl', right: 'Ácido Hidrácido' },
+          { id: 'p2', left: 'NaOH', right: 'Base o Hidróxido' },
+          { id: 'p3', left: 'NaCl', right: 'Sal Haloidea Binaria' },
+          { id: 'p4', left: 'H₂SO₄', right: 'Ácido Oxácido' }
+        ],
+        explanation: 'Cada sustancia se clasifica por su grupo funcional: H con no metal (hidrácido), OH (hidróxido), metal con no metal (sal haloidea) y H con no metal y O (oxácido).',
+        points: 25
+      },
+      {
+        id: 'multi_4',
+        type: 'abierta',
+        topic: 'Equilibrio Químico',
+        question: 'Explica el Principio de Le Chatelier y cómo responde un sistema en equilibrio químico gaseoso cuando se incrementa la presión externa.',
+        referenceAnswer: 'El Principio de Le Chatelier postula que si un sistema en equilibrio es perturbado, reaccionará desplazándose en el sentido que contrarreste la perturbación. Al aumentar la presión, el equilibrio se desplazará hacia el lado con menor número de moles gaseosos para reducir el volumen.',
+        explanation: 'Se califica la comprensión del desplazamiento hacia menor volumen molar y la respuesta compensatoria del equilibrio dinámico.',
+        points: 25
+      }
+    ],
+    durationMinutes: 20,
+    createdAt: Date.now() - 86400000 * 3,
+    updatedAt: Date.now() - 86400000 * 3
+  },
+  {
     id: 'exam_quimica_general',
     title: 'Examen de Química General (Enlaces y Reacciones)',
     description: 'Evaluación de enlaces químicos, clasificación de compuestos, estequiometría y pH.',
