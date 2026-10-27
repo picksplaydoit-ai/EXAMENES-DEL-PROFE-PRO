@@ -49,7 +49,7 @@ interface ExamLoaderModalProps {
   isOpen: boolean;
   initialTab?: 'create' | 'library';
   onClose: () => void;
-  onExamLoaded: (title: string, questions: Question[]) => void;
+  onExamLoaded: (title: string, questions: Question[], examId?: string, durationMinutes?: number) => void;
 }
 
 export const ExamLoaderModal: React.FC<ExamLoaderModalProps> = ({
@@ -502,7 +502,7 @@ export const ExamLoaderModal: React.FC<ExamLoaderModalProps> = ({
       await firebaseService.clearAllStudents();
     }
 
-    onExamLoaded(finalTitle, finalQuestions);
+    onExamLoaded(finalTitle, finalQuestions, saved.id, examDurationMinutes);
     setStatusMessage({ text: '¡Examen guardado en tu biblioteca y activado en tiempo real!', isError: false });
 
     setTimeout(() => {
@@ -514,7 +514,7 @@ export const ExamLoaderModal: React.FC<ExamLoaderModalProps> = ({
   const handleActivateSavedExam = async (exam: SavedExam) => {
     await firebaseService.activateSavedExam(exam.id, clearPreviousStudents);
 
-    onExamLoaded(exam.title, exam.questions);
+    onExamLoaded(exam.title, exam.questions, exam.id, exam.durationMinutes);
     setStatusMessage({ text: `✓ Examen "${exam.title}" activado con éxito.`, isError: false });
 
     setTimeout(() => {

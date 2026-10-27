@@ -27,9 +27,10 @@ export default function App() {
       const params = new URLSearchParams(window.location.search);
       const roleParam = params.get('role');
       const modeParam = params.get('mode');
+      const examIdParam = params.get('examId');
 
-      // If accessed via QR code with mode=student_only or role=student, lock exclusively to student view
-      if (modeParam === 'student_only' || roleParam === 'student') {
+      // If accessed via QR code with mode=student_only or role=student or examId, lock exclusively to student view
+      if (modeParam === 'student_only' || roleParam === 'student' || Boolean(examIdParam)) {
         setCurrentRole('student');
         setIsStudentOnly(true);
       } else if (roleParam === 'teacher') {

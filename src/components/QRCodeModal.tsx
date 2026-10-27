@@ -21,6 +21,7 @@ interface QRCodeModalProps {
   isOpen: boolean;
   onClose: () => void;
   examTitle: string;
+  examId?: string;
   globalSession?: GlobalSessionState;
   waitingStudentsCount?: number;
   initialDurationMinutes?: number;
@@ -34,6 +35,7 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
   isOpen,
   onClose,
   examTitle,
+  examId,
   globalSession,
   waitingStudentsCount = 0,
   initialDurationMinutes = 20,
@@ -49,16 +51,19 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
   const [remainingSeconds, setRemainingSeconds] = useState<number>(initialDurationMinutes * 60);
   const [hasStartedAction, setHasStartedAction] = useState(false);
 
+  // Detect current native origin
+  const currentDefaultOrigin = typeof window !== 'undefined'
+    ? (window.location.origin.includes('ais-dev-') 
+        ? window.location.origin.replace('ais-dev-', 'ais-pre-') 
+        : window.location.origin)
+    : '';
+
   // Custom origin support (e.g. Vercel, public preview, or local IP)
   const [customOrigin, setCustomOrigin] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('quimica_custom_student_base_url');
-      if (saved) return saved;
-      const origin = window.location.origin;
-      if (origin.includes('ais-dev-')) {
-        return origin.replace('ais-dev-', 'ais-pre-');
-      }
-      return origin;
+      if (saved && saved.trim()) return saved.trim();
+      return currentDefaultOrigin;
     }
     return '';
   });
@@ -71,9 +76,9 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
   }, [globalSession?.durationMinutes]);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && isOpen) {
       try {
-        let base = customOrigin.trim() || window.location.origin;
+        let base = (customOrigin.trim() || currentDefaultOrigin || window.location.origin).trim();
         if (!base.startsWith('http://') && !base.startsWith('https://')) {
           base = `https://${base}`;
         }
@@ -81,6 +86,9 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
         url.pathname = window.location.pathname;
         url.searchParams.set('role', 'student');
         url.searchParams.set('mode', 'student_only');
+        if (examId) {
+          url.searchParams.set('examId', examId);
+        }
         const computedUrl = url.toString();
         setStudentUrl(computedUrl);
 
@@ -105,10 +113,13 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
         const fallbackUrl = new URL(window.location.origin + window.location.pathname);
         fallbackUrl.searchParams.set('role', 'student');
         fallbackUrl.searchParams.set('mode', 'student_only');
+        if (examId) {
+          fallbackUrl.searchParams.set('examId', examId);
+        }
         setStudentUrl(fallbackUrl.toString());
       }
     }
-  }, [isOpen, customOrigin]);
+  }, [isOpen, customOrigin, examId, currentDefaultOrigin]);
 
   // Synchronized countdown timer when session is active
   useEffect(() => {
@@ -413,6 +424,22 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
 
           {/* Quick Domain Editor for Phones / Deployments */}
           <div className="text-left">
+            {customOrigin.trim() && currentDefaultOrigin && customOrigin.trim() !== currentDefaultOrigin && (
+              <div className="mb-2 p-2.5 bg-amber-500/15 border border-amber-500/40 rounded-xl flex items-center justify-between text-[11px] text-amber-300">
+                <span>⚠️ El QR apunta a un dominio manual guardado: <strong className="text-white font-mono">{customOrigin}</strong>. Si es de un despliegue anterior, puede mostrar un examen viejo.</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomOrigin(currentDefaultOrigin);
+                    localStorage.removeItem('quimica_custom_student_base_url');
+                  }}
+                  className="ml-2 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] shrink-0"
+                >
+                  Usar URL Actual
+                </button>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={() => setIsEditingUrl(!isEditingUrl)}
@@ -440,15 +467,12 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      const def = window.location.origin.includes('ais-dev-') 
-                        ? window.location.origin.replace('ais-dev-', 'ais-pre-')
-                        : window.location.origin;
-                      setCustomOrigin(def);
+                      setCustomOrigin(currentDefaultOrigin);
                       localStorage.removeItem('quimica_custom_student_base_url');
                     }}
                     className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-[11px]"
                   >
-                    Restablecer
+                    Usar URL Actual
                   </button>
                 </div>
               </div>

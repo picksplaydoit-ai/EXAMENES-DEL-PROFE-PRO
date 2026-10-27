@@ -122,6 +122,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       setExamData(data);
     });
 
+    // Ensure teacher loads the latest active exam from Firestore on mount
+    firebaseService.fetchActiveExam(true).then((fresh) => {
+      if (fresh && Array.isArray(fresh.questions) && fresh.questions.length > 0) {
+        setExamData(fresh);
+      }
+    }).catch(() => {});
+
     const unsubSession = firebaseService.subscribeToGlobalSession((session) => {
       setGlobalSession(session);
       if (session.durationMinutes) {
@@ -2222,8 +2229,12 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         isOpen={isExamLoaderOpen}
         initialTab={examLoaderTab}
         onClose={() => setIsExamLoaderOpen(false)}
-        onExamLoaded={(title, questions) => {
-          setExamData({ title, questions, updatedAt: Date.now() });
+        onExamLoaded={(title, questions, examId, durationMinutes) => {
+          const resolvedId = examId || `exam_${Date.now()}`;
+          setExamData({ examId: resolvedId, title, questions, updatedAt: Date.now() });
+          if (durationMinutes) {
+            setCustomDurationMinutes(durationMinutes);
+          }
         }}
       />
 
@@ -2231,6 +2242,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         isOpen={isQrModalOpen}
         onClose={() => setIsQrModalOpen(false)}
         examTitle={examData.title}
+        examId={examData.examId}
         globalSession={globalSession}
         waitingStudentsCount={waitingStudents.length}
         initialDurationMinutes={customDurationMinutes}

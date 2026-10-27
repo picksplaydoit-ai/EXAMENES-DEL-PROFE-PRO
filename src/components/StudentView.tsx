@@ -91,9 +91,32 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [examSubmittedTime, setExamSubmittedTime] = useState<number | undefined>(undefined);
   const [examStartTime, setExamStartTime] = useState<number | undefined>(undefined);
 
-  // 0. On mount, explicitly pull fresh active exam from Firestore to ensure teacher's latest exam is loaded
+  // 0. On mount, fetch fresh active exam (targeting URL examId if scanned from QR) and restore session safely
   useEffect(() => {
-    firebaseService.fetchActiveExam(true).then((fresh) => {
+    const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+    const urlExamId = urlParams ? urlParams.get('examId') : null;
+
+    // Fast check: if QR code specified a target examId, immediately discard any stored session from a different exam
+    if (urlExamId) {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY_STUDENT_SESSION);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed.examId && parsed.examId !== urlExamId) {
+            localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
+            setIsRegistered(false);
+            setIsExamStarted(false);
+            setExamStatus('not_started');
+            setSelectedAnswers({});
+            setCurrentQuestionIdx(0);
+          }
+        }
+      } catch {
+        // Ignore
+      }
+    }
+
+    firebaseService.fetchActiveExam(true, urlExamId || undefined).then((fresh) => {
       if (fresh && Array.isArray(fresh.questions) && fresh.questions.length > 0) {
         setExamData(fresh);
 
@@ -103,8 +126,9 @@ export const StudentView: React.FC<StudentViewProps> = ({
           if (raw) {
             const parsed = JSON.parse(raw);
             const isMatch = 
-              parsed.examTitle === fresh.title &&
+              (!urlExamId || !parsed.examId || parsed.examId === urlExamId) &&
               (!parsed.examId || !fresh.examId || parsed.examId === fresh.examId) &&
+              parsed.examTitle === fresh.title &&
               (!parsed.questionCount || parsed.questionCount === fresh.questions.length);
 
             if (!isMatch) {
@@ -114,12 +138,30 @@ export const StudentView: React.FC<StudentViewProps> = ({
               setExamStatus('not_started');
               setSelectedAnswers({});
               setCurrentQuestionIdx(0);
+            } else if (parsed && parsed.matricula && parsed.examStatus !== 'submitted' && parsed.examStatus !== 'forced_submission_cheat') {
+              setMatricula(parsed.matricula);
+              setFullName(parsed.fullName || '');
+              setHasAcceptedRules(Boolean(parsed.hasAcceptedRules));
+              setIsRegistered(Boolean(parsed.isRegistered));
+              setIsExamStarted(Boolean(parsed.isExamStarted));
+              if (typeof parsed.examStartTime === 'number') {
+                setExamStartTime(parsed.examStartTime);
+              } else if (typeof parsed.startedAt === 'number') {
+                setExamStartTime(parsed.startedAt);
+              }
+              if (parsed.examStatus) setExamStatus(parsed.examStatus);
+              if (typeof parsed.currentQuestionIdx === 'number') setCurrentQuestionIdx(parsed.currentQuestionIdx);
+              if (parsed.selectedAnswers) setSelectedAnswers(parsed.selectedAnswers);
+              if (typeof parsed.warningsCount === 'number') setWarningsCount(parsed.warningsCount);
+              if (Array.isArray(parsed.cheatLogs)) setCheatLogs(parsed.cheatLogs);
             }
           }
         } catch {
           // Ignore
         }
       }
+    }).catch((err) => {
+      console.warn('Nota cargando examen inicial:', err);
     });
   }, []);
 
@@ -132,57 +174,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
     );
     setStudentQuestions(randomized);
   }, [examData, matricula]);
-
-  // 1. Restore previous active session from localStorage so reload/network drops do not close exam
-  useEffect(() => {
-    try {
-      const savedSession = localStorage.getItem(STORAGE_KEY_STUDENT_SESSION);
-      if (savedSession) {
-        const parsed = JSON.parse(savedSession);
-        const currentExam = firebaseService.getActiveExam();
-        
-        // If the saved session is from a different exam or older version, discard stale attempt
-        const isSameExam = 
-          parsed.examTitle === currentExam.title &&
-          (!parsed.examId || !currentExam.examId || parsed.examId === currentExam.examId) &&
-          (!parsed.questionCount || parsed.questionCount === (currentExam.questions || []).length);
-
-        if (!isSameExam) {
-          localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
-          setIsRegistered(false);
-          setIsExamStarted(false);
-          setExamStatus('not_started');
-          setSelectedAnswers({});
-          setCurrentQuestionIdx(0);
-          return;
-        }
-
-        if (parsed && parsed.matricula && parsed.examStatus !== 'submitted' && parsed.examStatus !== 'forced_submission_cheat') {
-          setMatricula(parsed.matricula);
-          setFullName(parsed.fullName || '');
-          setHasAcceptedRules(Boolean(parsed.hasAcceptedRules));
-          setIsRegistered(Boolean(parsed.isRegistered));
-          setIsExamStarted(Boolean(parsed.isExamStarted));
-          if (typeof parsed.examStartTime === 'number') {
-            setExamStartTime(parsed.examStartTime);
-          } else if (typeof parsed.startedAt === 'number') {
-            setExamStartTime(parsed.startedAt);
-          }
-          if (parsed.examStatus) setExamStatus(parsed.examStatus);
-          if (typeof parsed.currentQuestionIdx === 'number') setCurrentQuestionIdx(parsed.currentQuestionIdx);
-          if (parsed.selectedAnswers) setSelectedAnswers(parsed.selectedAnswers);
-          if (typeof parsed.warningsCount === 'number') setWarningsCount(parsed.warningsCount);
-          if (Array.isArray(parsed.cheatLogs)) setCheatLogs(parsed.cheatLogs);
-        } else {
-          setIsRegistered(false);
-          setIsExamStarted(false);
-          setExamStatus('not_started');
-        }
-      }
-    } catch (e) {
-      console.warn('Nota al restaurar sesión previa:', e);
-    }
-  }, []);
 
   // 2. Persist student answers and progress locally in case of internet drops
   useEffect(() => {
@@ -271,7 +262,9 @@ export const StudentView: React.FC<StudentViewProps> = ({
     setIsRefreshingExam(true);
     soundManager.playClick();
     try {
-      const fresh = await firebaseService.fetchActiveExam(true);
+      const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+      const urlExamId = urlParams ? urlParams.get('examId') : null;
+      const fresh = await firebaseService.fetchActiveExam(true, urlExamId || undefined);
       if (fresh) {
         setExamData(fresh);
         localStorage.removeItem(STORAGE_KEY_STUDENT_SESSION);
@@ -395,7 +388,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
       id: curMatricula,
       matricula: curMatricula,
       fullName: stateRef.current.fullName.trim() || 'Alumno',
-      examId: 'quimica_general_2026',
+      examId: examData.examId || 'quimica_general_2026',
       examTitle: stateRef.current.examTitle || 'Examen de Química',
       status: status,
       startedAt: resolvedStartedAt,
@@ -606,7 +599,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
       id: matricula.trim().toUpperCase(),
       matricula: matricula.trim().toUpperCase(),
       fullName: fullName.trim(),
-      examId: 'quimica_general_2026',
+      examId: examData.examId || 'quimica_general_2026',
       examTitle: examData.title,
       status: isActiveSession ? 'in_progress' : 'waiting',
       joinedWaitingAt: now,
@@ -892,7 +885,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
             id: matricula.toUpperCase(),
             matricula: matricula.toUpperCase(),
             fullName,
-            examId: 'quimica_general_2026',
+            examId: examData.examId || 'quimica_general_2026',
             examTitle: examData.title,
             status: 'waiting',
             currentQuestionIndex: 0,

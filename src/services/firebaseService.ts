@@ -61,6 +61,25 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   return errInfo;
 }
 
+/**
+ * Deeply sanitizes objects before passing them to Firestore setDoc / updateDoc.
+ * Drops keys with undefined values to prevent Firestore unsupported field errors.
+ */
+export function sanitizeForFirestore<T>(data: T): T {
+  if (data === null || data === undefined) return null as any;
+  if (typeof data !== 'object') return data;
+  if (Array.isArray(data)) {
+    return data.map((item) => sanitizeForFirestore(item)) as any;
+  }
+  const clean: Record<string, any> = {};
+  for (const [key, value] of Object.entries(data as Record<string, any>)) {
+    if (value !== undefined) {
+      clean[key] = sanitizeForFirestore(value);
+    }
+  }
+  return clean as T;
+}
+
 const STORAGE_KEY_FIREBASE_CONFIG = 'quimica_firebase_config_v1';
 const STORAGE_KEY_STUDENTS_LOCAL = 'quimica_students_local_db';
 const STORAGE_KEY_EXAM_DATA = 'quimica_exam_data_v1';
@@ -306,7 +325,8 @@ class FirebaseDualService {
         if (config.firestoreDatabaseId) {
           try {
             this.firestore = initializeFirestore(this.app, {
-              experimentalAutoDetectLongPolling: true
+              experimentalAutoDetectLongPolling: true,
+              ignoreUndefinedProperties: true
             }, config.firestoreDatabaseId);
           } catch {
             this.firestore = getFirestore(this.app, config.firestoreDatabaseId);
@@ -314,7 +334,8 @@ class FirebaseDualService {
         } else {
           try {
             this.firestore = initializeFirestore(this.app, {
-              experimentalAutoDetectLongPolling: true
+              experimentalAutoDetectLongPolling: true,
+              ignoreUndefinedProperties: true
             });
           } catch {
             this.firestore = getFirestore(this.app);
@@ -425,8 +446,9 @@ class FirebaseDualService {
     // Sync to Firestore
     if (this.firestore) {
       try {
+        const cleanSession = sanitizeForFirestore(session);
         const sessionDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'session', 'current');
-        await setDoc(sessionDocRef, session, { merge: true });
+        await setDoc(sessionDocRef, cleanSession, { merge: true });
       } catch (err) {
         if ((err as { code?: string })?.code === 'permission-denied') {
           handleFirestoreError(err, OperationType.WRITE, 'exams/quimica_general_2026/session/current');
@@ -510,9 +532,34 @@ class FirebaseDualService {
     return this.activeExamData;
   }
 
-  public async fetchActiveExam(forceServer: boolean = false): Promise<ExamDataPayload> {
+  public async fetchActiveExam(forceServer: boolean = false, targetExamId?: string): Promise<ExamDataPayload> {
     if (this.firestore) {
       try {
+        // 1. If a specific exam ID is requested (e.g. from QR code ?examId=...)
+        if (targetExamId && targetExamId.trim() && targetExamId.trim() !== 'quimica_general_2026') {
+          const cleanTargetId = targetExamId.trim();
+          try {
+            const specificDocRef = doc(this.firestore, 'exams', cleanTargetId);
+            const specificSnap = forceServer 
+              ? await getDocFromServer(specificDocRef).catch(() => getDoc(specificDocRef)) 
+              : await getDoc(specificDocRef);
+            if (specificSnap && specificSnap.exists()) {
+              const val = specificSnap.data() as ExamDataPayload;
+              if (val && Array.isArray(val.questions) && val.questions.length > 0) {
+                this.activeExamData = val;
+                try {
+                  localStorage.setItem(STORAGE_KEY_EXAM_DATA, JSON.stringify(val));
+                } catch {}
+                this.notifyExamListeners();
+                return val;
+              }
+            }
+          } catch (spErr) {
+            console.warn('Nota consultando examId específico en Firestore:', spErr);
+          }
+        }
+
+        // 2. Fetch active universal exam
         const examDocRef = doc(this.firestore, 'exams', 'quimica_general_2026');
         let snap;
         if (forceServer) {
@@ -543,14 +590,16 @@ class FirebaseDualService {
     return this.activeExamData;
   }
 
-  public async saveActiveExam(title: string, questions: Question[], examId?: string): Promise<void> {
+  public async saveActiveExam(title: string, questions: Question[], examId?: string, durationMinutes?: number): Promise<ExamDataPayload> {
+    const cleanId = examId || `exam_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const payload: ExamDataPayload = {
-      examId: examId || `exam_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      examId: cleanId,
       title: title.trim() || 'Examen de Química',
       questions,
       updatedAt: Date.now()
     };
-    this.activeExamData = payload;
+    const cleanPayload = sanitizeForFirestore(payload);
+    this.activeExamData = cleanPayload;
 
     // Reset student active session on this device/tab so taking the new exam starts completely fresh
     if (typeof window !== 'undefined') {
@@ -560,7 +609,7 @@ class FirebaseDualService {
     }
 
     try {
-      localStorage.setItem(STORAGE_KEY_EXAM_DATA, JSON.stringify(payload));
+      localStorage.setItem(STORAGE_KEY_EXAM_DATA, JSON.stringify(cleanPayload));
     } catch {
       // Ignore
     }
@@ -569,7 +618,7 @@ class FirebaseDualService {
       try {
         this.broadcastChannel.postMessage({
           type: 'EXAM_DATA_UPDATE',
-          payload
+          payload: cleanPayload
         });
       } catch {
         // Ignore
@@ -580,7 +629,7 @@ class FirebaseDualService {
 
     if (typeof window !== 'undefined') {
       try {
-        window.dispatchEvent(new CustomEvent('quimica:exam_sync', { detail: payload }));
+        window.dispatchEvent(new CustomEvent('quimica:exam_sync', { detail: cleanPayload }));
       } catch {
         // Ignore
       }
@@ -589,8 +638,15 @@ class FirebaseDualService {
     // Save to Firestore (full overwrite so new questions replace old ones cleanly)
     if (this.firestore) {
       try {
+        // 1. Universal active exam doc
         const examDocRef = doc(this.firestore, 'exams', 'quimica_general_2026');
-        await setDoc(examDocRef, payload);
+        await setDoc(examDocRef, cleanPayload);
+
+        // 2. Specific exam doc by examId (for QR code direct queries)
+        if (cleanId && cleanId !== 'quimica_general_2026') {
+          const specificDocRef = doc(this.firestore, 'exams', cleanId);
+          await setDoc(specificDocRef, cleanPayload).catch(() => {});
+        }
       } catch (err) {
         if ((err as { code?: string })?.code === 'permission-denied') {
           handleFirestoreError(err, OperationType.WRITE, 'exams/quimica_general_2026');
@@ -600,15 +656,26 @@ class FirebaseDualService {
       }
     }
 
-    // Save to RTDB
+    // Update global session duration and title in lockstep
+    const currentSession = this.globalSession;
+    await this.setGlobalSession({
+      ...currentSession,
+      title: cleanPayload.title,
+      durationMinutes: durationMinutes || currentSession.durationMinutes || 20,
+      updatedAt: Date.now()
+    });
+
+    // Save to RTDB fallback if configured
     if (this.db) {
       try {
         const examRef = ref(this.db, DB_EXAM_PATH);
-        await set(examRef, payload);
+        await set(examRef, cleanPayload);
       } catch (err) {
         console.error('Error guardando examen en RTDB:', err);
       }
     }
+
+    return cleanPayload;
   }
 
   public subscribeToExam(callback: (data: ExamDataPayload) => void): () => void {
@@ -718,16 +785,7 @@ class FirebaseDualService {
     const target = this.savedExams.find((e) => e.id === id);
     if (!target) return null;
 
-    await this.saveActiveExam(target.title, target.questions, target.id);
-    if (target.durationMinutes) {
-      this.globalSession.durationMinutes = target.durationMinutes;
-      await this.setGlobalSession({
-        ...this.globalSession,
-        durationMinutes: target.durationMinutes,
-        title: target.title,
-        updatedAt: Date.now()
-      });
-    }
+    await this.saveActiveExam(target.title, target.questions, target.id, target.durationMinutes);
 
     if (clearStudents) {
       await this.clearAllStudents();
@@ -783,7 +841,7 @@ class FirebaseDualService {
         const st = q[id];
         try {
           const studentDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'students', id);
-          await setDoc(studentDocRef, st, { merge: true });
+          await setDoc(studentDocRef, sanitizeForFirestore(st), { merge: true });
           delete q[id];
         } catch {
           // Keep in queue for next flush attempt
@@ -817,14 +875,16 @@ class FirebaseDualService {
       }
     }
 
-    this.localStudentsCache[student.id] = student;
+    const cleanStudent = sanitizeForFirestore(student);
+
+    this.localStudentsCache[cleanStudent.id] = cleanStudent;
     this.saveLocalCache();
 
     if (this.broadcastChannel) {
       try {
         this.broadcastChannel.postMessage({
           type: 'STUDENT_UPDATE',
-          payload: student
+          payload: cleanStudent
         });
       } catch {
         // Ignore
@@ -835,19 +895,19 @@ class FirebaseDualService {
 
     // Check if offline: queue immediately
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      this.queueOfflineStudent(student);
+      this.queueOfflineStudent(cleanStudent);
       return;
     }
 
     // Sync to Firestore
     if (this.firestore) {
       try {
-        const studentDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'students', student.id);
-        await setDoc(studentDocRef, student, { merge: true });
+        const studentDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'students', cleanStudent.id);
+        await setDoc(studentDocRef, cleanStudent, { merge: true });
       } catch (err) {
-        this.queueOfflineStudent(student);
+        this.queueOfflineStudent(cleanStudent);
         if ((err as { code?: string })?.code === 'permission-denied') {
-          handleFirestoreError(err, OperationType.WRITE, `exams/quimica_general_2026/students/${student.id}`);
+          handleFirestoreError(err, OperationType.WRITE, `exams/quimica_general_2026/students/${cleanStudent.id}`);
         } else {
           console.warn('Sync diferido por fallo de red; encolado para reintento automático:', err);
         }
@@ -952,7 +1012,7 @@ class FirebaseDualService {
       // 2. Exam document listener
       const examDocRef = doc(this.firestore, 'exams', 'quimica_general_2026');
       
-      // Fetch immediately on boot so student doesn't wait for onSnapshot
+      // Fetch on boot without auto-seeding (only teacher saves/updates active exam)
       getDoc(examDocRef).then((snap) => {
         if (snap.exists()) {
           const val = snap.data() as ExamDataPayload;
@@ -963,11 +1023,6 @@ class FirebaseDualService {
             } catch {}
             this.notifyExamListeners();
           }
-        } else {
-          // Document does not exist in Firestore yet: seed it with activeExamData
-          setDoc(examDocRef, this.activeExamData).catch((err) => {
-            console.warn('Auto-seed exam doc notice:', err);
-          });
         }
       }).catch((err) => {
         console.warn('Initial exam getDoc note (will rely on snapshot/cache):', err);
@@ -1005,10 +1060,6 @@ class FirebaseDualService {
             } catch {}
             this.notifySessionListeners();
           }
-        } else {
-          setDoc(sessionDocRef, this.globalSession).catch((err) => {
-            console.warn('Auto-seed session doc notice:', err);
-          });
         }
       }).catch((err) => {
         console.warn('Initial session getDoc note:', err);
