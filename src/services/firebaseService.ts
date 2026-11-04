@@ -134,6 +134,7 @@ class FirebaseDualService {
   private firestoreStudentsUnsub: FirestoreUnsubscribe | null = null;
   private firestoreExamUnsub: FirestoreUnsubscribe | null = null;
   private firestoreSessionUnsub: FirestoreUnsubscribe | null = null;
+  private firestoreSavedExamsUnsub: FirestoreUnsubscribe | null = null;
 
   constructor() {
     this.initBroadcastChannel();
@@ -178,6 +179,9 @@ class FirebaseDualService {
             } else if (event.data?.type === 'SESSION_UPDATE') {
               this.globalSession = event.data.payload as GlobalSessionState;
               this.notifySessionListeners();
+            } else if (event.data?.type === 'SAVED_EXAMS_UPDATE') {
+              this.savedExams = event.data.payload as SavedExam[];
+              this.notifySavedExamsListeners();
             }
           };
         } catch (err) {
@@ -412,6 +416,7 @@ class FirebaseDualService {
     if (this.firestoreStudentsUnsub) this.firestoreStudentsUnsub();
     if (this.firestoreExamUnsub) this.firestoreExamUnsub();
     if (this.firestoreSessionUnsub) this.firestoreSessionUnsub();
+    if (this.firestoreSavedExamsUnsub) this.firestoreSavedExamsUnsub();
 
     localStorage.removeItem(STORAGE_KEY_FIREBASE_CONFIG);
     this.notifyListeners();
@@ -769,6 +774,30 @@ class FirebaseDualService {
 
     this.saveSavedExamsToStorage();
     this.notifySavedExamsListeners();
+
+    // Broadcast across local tabs
+    if (this.broadcastChannel) {
+      try {
+        this.broadcastChannel.postMessage({
+          type: 'SAVED_EXAMS_UPDATE',
+          payload: this.savedExams
+        });
+      } catch {
+        // Ignore
+      }
+    }
+
+    // Persist to Cloud Firestore
+    if (this.firestore) {
+      try {
+        const cleanSavedDoc = sanitizeForFirestore(savedItem);
+        const savedDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'saved_exams', examId);
+        await setDoc(savedDocRef, cleanSavedDoc, { merge: true });
+      } catch (err) {
+        console.warn('Error sincronizando examen guardado en Firestore:', err);
+      }
+    }
+
     return savedItem;
   }
 
@@ -779,6 +808,28 @@ class FirebaseDualService {
     }
     this.saveSavedExamsToStorage();
     this.notifySavedExamsListeners();
+
+    // Broadcast across local tabs
+    if (this.broadcastChannel) {
+      try {
+        this.broadcastChannel.postMessage({
+          type: 'SAVED_EXAMS_UPDATE',
+          payload: this.savedExams
+        });
+      } catch {
+        // Ignore
+      }
+    }
+
+    // Delete from Cloud Firestore
+    if (this.firestore) {
+      try {
+        const savedDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'saved_exams', id);
+        await deleteDoc(savedDocRef);
+      } catch (err) {
+        console.warn('Error eliminando examen guardado en Firestore:', err);
+      }
+    }
   }
 
   public async activateSavedExam(id: string, clearStudents: boolean = true): Promise<SavedExam | null> {
@@ -987,6 +1038,7 @@ class FirebaseDualService {
     if (this.firestoreStudentsUnsub) this.firestoreStudentsUnsub();
     if (this.firestoreExamUnsub) this.firestoreExamUnsub();
     if (this.firestoreSessionUnsub) this.firestoreSessionUnsub();
+    if (this.firestoreSavedExamsUnsub) this.firestoreSavedExamsUnsub();
 
     try {
       // 1. Students collection listener
@@ -1081,6 +1133,56 @@ class FirebaseDualService {
           handleFirestoreError(error, OperationType.GET, 'exams/quimica_general_2026/session/current');
         } else {
           console.warn('Firestore session listener warning:', error);
+        }
+      });
+      // 4. Saved Exams Library collection listener (synchronizes custom exams across devices)
+      const savedExamsColRef = collection(this.firestore, 'exams', 'quimica_general_2026', 'saved_exams');
+      
+      this.firestoreSavedExamsUnsub = onSnapshot(savedExamsColRef, (snapshot) => {
+        if (!snapshot.empty) {
+          const remoteExams: SavedExam[] = [];
+          snapshot.forEach((docSnap) => {
+            const data = docSnap.data() as SavedExam;
+            if (data && data.title && Array.isArray(data.questions)) {
+              remoteExams.push(data);
+            }
+          });
+
+          if (remoteExams.length > 0) {
+            // Merge with local exams: keep newer or unique ones
+            const examMap = new Map<string, SavedExam>();
+            // Add predefined
+            PREDEFINED_SAVED_EXAMS.forEach((ex) => examMap.set(ex.id, ex));
+            // Add local existing
+            this.savedExams.forEach((ex) => examMap.set(ex.id, ex));
+            // Overwrite with remote
+            remoteExams.forEach((ex) => examMap.set(ex.id, ex));
+
+            const merged = Array.from(examMap.values());
+            this.savedExams = merged;
+            this.saveSavedExamsToStorage();
+            this.notifySavedExamsListeners();
+          }
+        } else {
+          // If Firestore collection is empty and we have local custom exams, seed them to Firestore
+          if (this.savedExams.length > 0) {
+            this.savedExams.forEach(async (ex) => {
+              if (this.firestore) {
+                try {
+                  const docRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'saved_exams', ex.id);
+                  await setDoc(docRef, sanitizeForFirestore(ex), { merge: true });
+                } catch {
+                  // Ignore seeding errors
+                }
+              }
+            });
+          }
+        }
+      }, (error) => {
+        if (error.code === 'permission-denied') {
+          handleFirestoreError(error, OperationType.LIST, 'exams/quimica_general_2026/saved_exams');
+        } else {
+          console.warn('Firestore saved_exams listener warning:', error);
         }
       });
     } catch (err) {
