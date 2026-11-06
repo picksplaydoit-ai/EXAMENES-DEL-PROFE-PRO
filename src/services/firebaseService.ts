@@ -91,6 +91,7 @@ const CHANNEL_NAME = 'quimica_live_proctor_channel';
 const DB_BASE_PATH = 'exams/quimica_general_2026/students';
 const DB_EXAM_PATH = 'exams/quimica_general_2026/exam_data';
 const DB_SESSION_PATH = 'exams/quimica_general_2026/global_session';
+const FIRESTORE_LIBRARY_DOC_ID = 'saved_exams_library';
 
 export interface ExamDataPayload {
   examId?: string;
@@ -787,16 +788,8 @@ class FirebaseDualService {
       }
     }
 
-    // Persist to Cloud Firestore
-    if (this.firestore) {
-      try {
-        const cleanSavedDoc = sanitizeForFirestore(savedItem);
-        const savedDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'saved_exams', examId);
-        await setDoc(savedDocRef, cleanSavedDoc, { merge: true });
-      } catch (err) {
-        console.warn('Error sincronizando examen guardado en Firestore:', err);
-      }
-    }
+    // Persist full library to Cloud Firestore under authorized doc /exams/saved_exams_library
+    await this.syncLibraryToFirestore();
 
     return savedItem;
   }
@@ -821,14 +814,21 @@ class FirebaseDualService {
       }
     }
 
-    // Delete from Cloud Firestore
-    if (this.firestore) {
-      try {
-        const savedDocRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'saved_exams', id);
-        await deleteDoc(savedDocRef);
-      } catch (err) {
-        console.warn('Error eliminando examen guardado en Firestore:', err);
-      }
+    // Persist updated library to Cloud Firestore
+    await this.syncLibraryToFirestore();
+  }
+
+  private async syncLibraryToFirestore(): Promise<void> {
+    if (!this.firestore) return;
+    try {
+      const libraryDocRef = doc(this.firestore, 'exams', FIRESTORE_LIBRARY_DOC_ID);
+      const cleanData = sanitizeForFirestore({
+        exams: this.savedExams,
+        updatedAt: Date.now()
+      });
+      await setDoc(libraryDocRef, cleanData, { merge: true });
+    } catch (err) {
+      console.warn('Error sincronizando biblioteca de exámenes con Firestore:', err);
     }
   }
 
@@ -1135,54 +1135,47 @@ class FirebaseDualService {
           console.warn('Firestore session listener warning:', error);
         }
       });
-      // 4. Saved Exams Library collection listener (synchronizes custom exams across devices)
-      const savedExamsColRef = collection(this.firestore, 'exams', 'quimica_general_2026', 'saved_exams');
+      // 4. Saved Exams Library doc listener (synchronizes custom exams across all devices via /exams/saved_exams_library)
+      const libraryDocRef = doc(this.firestore, 'exams', FIRESTORE_LIBRARY_DOC_ID);
       
-      this.firestoreSavedExamsUnsub = onSnapshot(savedExamsColRef, (snapshot) => {
-        if (!snapshot.empty) {
-          const remoteExams: SavedExam[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data() as SavedExam;
-            if (data && data.title && Array.isArray(data.questions)) {
-              remoteExams.push(data);
-            }
-          });
+      this.firestoreSavedExamsUnsub = onSnapshot(libraryDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const remoteExams = (data?.exams || []) as SavedExam[];
 
-          if (remoteExams.length > 0) {
-            // Merge with local exams: keep newer or unique ones
+          if (Array.isArray(remoteExams) && remoteExams.length > 0) {
+            // Merge with local exams
             const examMap = new Map<string, SavedExam>();
             // Add predefined
             PREDEFINED_SAVED_EXAMS.forEach((ex) => examMap.set(ex.id, ex));
             // Add local existing
             this.savedExams.forEach((ex) => examMap.set(ex.id, ex));
-            // Overwrite with remote
-            remoteExams.forEach((ex) => examMap.set(ex.id, ex));
+            // Overwrite/merge remote
+            remoteExams.forEach((ex) => {
+              if (ex && ex.id && ex.title && Array.isArray(ex.questions)) {
+                examMap.set(ex.id, ex);
+              }
+            });
 
             const merged = Array.from(examMap.values());
             this.savedExams = merged;
             this.saveSavedExamsToStorage();
             this.notifySavedExamsListeners();
+          } else if (this.savedExams.length > 0) {
+            // Document was just created or empty, push existing local exams to cloud
+            this.syncLibraryToFirestore();
           }
         } else {
-          // If Firestore collection is empty and we have local custom exams, seed them to Firestore
+          // Document does not exist yet: seed current local exams to Cloud Firestore
           if (this.savedExams.length > 0) {
-            this.savedExams.forEach(async (ex) => {
-              if (this.firestore) {
-                try {
-                  const docRef = doc(this.firestore, 'exams', 'quimica_general_2026', 'saved_exams', ex.id);
-                  await setDoc(docRef, sanitizeForFirestore(ex), { merge: true });
-                } catch {
-                  // Ignore seeding errors
-                }
-              }
-            });
+            this.syncLibraryToFirestore();
           }
         }
       }, (error) => {
         if (error.code === 'permission-denied') {
-          handleFirestoreError(error, OperationType.LIST, 'exams/quimica_general_2026/saved_exams');
+          handleFirestoreError(error, OperationType.GET, `exams/${FIRESTORE_LIBRARY_DOC_ID}`);
         } else {
-          console.warn('Firestore saved_exams listener warning:', error);
+          console.warn('Firestore libraryDoc listener warning:', error);
         }
       });
     } catch (err) {
